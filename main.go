@@ -13,12 +13,14 @@ import (
 )
 
 type Certificate struct {
-	Subject   string
-	Issuer    string
-	SerialNum string
-	FilePath  string
-	X509Cert  *x509.Certificate
-	Children  []*Certificate
+	Subject      string
+	Issuer       string
+	SerialNum    string
+	FilePath     string
+	X509Cert     *x509.Certificate
+	Children     []*Certificate
+	IsSelfSigned bool
+	IsRoot       bool
 }
 
 func main() {
@@ -103,13 +105,17 @@ func loadCertificate(filePath string) (*Certificate, error) {
 		lastFourBytes = fmt.Sprintf("%x", x509Cert.SerialNumber)
 	}
 
+	isSelfSigned := x509Cert.Subject.String() == x509Cert.Issuer.String()
+
 	cert := &Certificate{
-		Subject:   x509Cert.Subject.String(),
-		Issuer:    x509Cert.Issuer.String(),
-		SerialNum: lastFourBytes,
-		FilePath:  filePath,
-		X509Cert:  x509Cert,
-		Children:  make([]*Certificate, 0),
+		Subject:      x509Cert.Subject.String(),
+		Issuer:       x509Cert.Issuer.String(),
+		SerialNum:    lastFourBytes,
+		FilePath:     filePath,
+		X509Cert:     x509Cert,
+		Children:     make([]*Certificate, 0),
+		IsSelfSigned: isSelfSigned,
+		IsRoot:       false,
 	}
 
 	return cert, nil
@@ -127,14 +133,16 @@ func buildCertificateTree(certs []*Certificate) []*Certificate {
 	// Build parent-child relationships
 	for _, cert := range certs {
 		// If issuer equals subject, it's a self-signed root certificate
-		if cert.Issuer == cert.Subject {
+		if cert.IsSelfSigned {
+			cert.IsRoot = true
 			roots = append(roots, cert)
 		} else {
 			// Find parent certificate by matching issuer with subject
 			if parent, exists := subjectMap[cert.Issuer]; exists {
 				parent.Children = append(parent.Children, cert)
 			} else {
-				// No parent found, treat as root (orphaned certificate)
+				// No parent found, treat as root (externally signed certificate)
+				cert.IsRoot = true
 				roots = append(roots, cert)
 			}
 		}
@@ -158,7 +166,17 @@ func sortCertificates(certs []*Certificate) {
 func printCertificateTree(certs []*Certificate, level int) {
 	for _, cert := range certs {
 		indent := strings.Repeat("  ", level)
-		fmt.Printf("%s%s (...%s)\n", indent, cert.Subject, cert.SerialNum)
+		indicator := ""
+
+		if cert.IsRoot {
+			if cert.IsSelfSigned {
+				indicator = " [SELF-SIGNED]"
+			} else {
+				indicator = " [EXTERNALLY SIGNED]"
+			}
+		}
+
+		fmt.Printf("%s%s (...%s)%s\n", indent, cert.Subject, cert.SerialNum, indicator)
 
 		if len(cert.Children) > 0 {
 			printCertificateTree(cert.Children, level+1)
