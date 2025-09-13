@@ -64,7 +64,7 @@ $ vibecert export-pkcs12 -cert-serial ab0d2b0906783305e668562be2f4f8e8
 Enter password for private key:
 Enter password for PKCS#12 file:
 PKCS#12 file exported successfully:
-  File: ab0d2b0906783305e668562be2f4f8e8.p12
+  File: data/pkcs12/ab0d2b0906783305e668562be2f4f8e8.p12
   Certificate: Dad's iPhone 15
   Friendly name: Dad's iPhone 15
   CA certificates included: 2
