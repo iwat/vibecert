@@ -302,7 +302,7 @@ func runCreateRootCommand() {
 	}
 
 	// Generate key pair
-	var privateKey interface{}
+	var privateKey any
 
 	switch *keyType {
 	case "ecc":
@@ -357,7 +357,7 @@ func runCreateRootCommand() {
 	}
 
 	// Generate certificate (self-signed for root)
-	var publicKey interface{}
+	var publicKey any
 	switch k := privateKey.(type) {
 	case *ecdsa.PrivateKey:
 		publicKey = &k.PublicKey
@@ -494,7 +494,7 @@ func runCreateIntermediateCommand() {
 	}
 
 	// Generate key pair for intermediate certificate
-	var privateKey interface{}
+	var privateKey any
 
 	switch *keyType {
 	case "ecc":
@@ -550,7 +550,7 @@ func runCreateIntermediateCommand() {
 	}
 
 	// Generate certificate (signed by parent CA)
-	var publicKey interface{}
+	var publicKey any
 	switch k := privateKey.(type) {
 	case *ecdsa.PrivateKey:
 		publicKey = &k.PublicKey
@@ -683,7 +683,7 @@ func runCreateLeafCommand() {
 	}
 
 	// Generate key pair for leaf certificate
-	var privateKey interface{}
+	var privateKey any
 
 	switch *keyType {
 	case "ecc":
@@ -772,7 +772,7 @@ func runCreateLeafCommand() {
 	}
 
 	// Generate certificate (signed by parent CA)
-	var publicKey interface{}
+	var publicKey any
 	switch k := privateKey.(type) {
 	case *ecdsa.PrivateKey:
 		publicKey = &k.PublicKey
@@ -1016,7 +1016,7 @@ func generateUniqueSerial() (*big.Int, error) {
 	}
 }
 
-func saveEncryptedPrivateKey(filename string, key interface{}, password string) error {
+func saveEncryptedPrivateKey(filename string, key any, password string) error {
 	keyFile, err := os.Create(filename)
 	if err != nil {
 		return err
@@ -1090,7 +1090,7 @@ func loadCertificateFromFile(filePath string) (*x509.Certificate, error) {
 	return x509.ParseCertificate(certPEM)
 }
 
-func loadEncryptedPrivateKey(filePath string, password string) (interface{}, error) {
+func loadEncryptedPrivateKey(filePath string, password string) (any, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
