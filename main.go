@@ -147,7 +147,7 @@ func loadCertificate(filePath string) (*Certificate, error) {
 		return nil, err
 	}
 
-	serialNum := fmt.Sprintf("%x", x509Cert.SerialNumber)
+	serialNum := fmt.Sprintf("%032x", x509Cert.SerialNumber)
 
 	isSelfSigned := x509Cert.Subject.String() == x509Cert.Issuer.String()
 
@@ -371,7 +371,7 @@ func runCreateRootCommand() {
 	}
 
 	// Generate file names based on serial number
-	serialStr := fmt.Sprintf("%x", serialNum)
+	serialStr := fmt.Sprintf("%032x", serialNum)
 	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
 	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
 
@@ -564,7 +564,7 @@ func runCreateIntermediateCommand() {
 	}
 
 	// Generate file names based on serial number
-	serialStr := fmt.Sprintf("%x", serialNum)
+	serialStr := fmt.Sprintf("%032x", serialNum)
 	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
 	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
 
@@ -786,7 +786,7 @@ func runCreateLeafCommand() {
 	}
 
 	// Generate file names based on serial number
-	serialStr := fmt.Sprintf("%x", serialNum)
+	serialStr := fmt.Sprintf("%032x", serialNum)
 	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
 	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
 
@@ -1001,7 +1001,7 @@ func generateUniqueSerial() (*big.Int, error) {
 		}
 
 		// Check if files with this serial already exist
-		serialStr := fmt.Sprintf("%x", serial)
+		serialStr := fmt.Sprintf("%032x", serial)
 		keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
 		certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
 
