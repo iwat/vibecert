@@ -47,6 +47,8 @@ func main() {
 		runTreeCommand()
 	case "create-root":
 		runCreateRootCommand()
+	case "create-intermediate":
+		runCreateIntermediateCommand()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -60,9 +62,10 @@ func printUsage() {
 	fmt.Println("Usage: vibecert <command> [arguments]")
 	fmt.Println("")
 	fmt.Println("Available commands:")
-	fmt.Println("  tree        Display certificate dependency tree")
-	fmt.Println("  create-root Generate a new root certificate and key")
-	fmt.Println("  help        Show this help message")
+	fmt.Println("  tree             Display certificate dependency tree")
+	fmt.Println("  create-root      Generate a new root certificate and key")
+	fmt.Println("  create-intermediate Generate an intermediate CA certificate")
+	fmt.Println("  help             Show this help message")
 	fmt.Println("")
 	fmt.Println("For command-specific help, use: vibecert <command> --help")
 }
@@ -382,6 +385,201 @@ func runCreateRootCommand() {
 	fmt.Printf("  Valid for: %d days\n", *validDays)
 }
 
+func runCreateIntermediateCommand() {
+	fs := flag.NewFlagSet("create-intermediate", flag.ExitOnError)
+
+	var (
+		keyType      = fs.String("key-type", "ecc", "Key type: ecc, rsa-2048, rsa-3072, or rsa-4096")
+		commonName   = fs.String("cn", "", "Common Name (required)")
+		organization = fs.String("org", "", "Organization name (required)")
+		country      = fs.String("country", "", "Country code (required, e.g., US)")
+		validDays    = fs.Int("valid-days", 1825, "Certificate validity period in days (default: 5 years)")
+		caSerial     = fs.String("ca-serial", "", "Serial number of parent CA certificate (required)")
+		keyCertSign  = fs.Bool("key-cert-sign", true, "Allow certificate signing")
+		crlSign      = fs.Bool("crl-sign", true, "Allow CRL signing")
+		ocspSign     = fs.Bool("ocsp-sign", true, "Allow OCSP signing")
+		pathLen      = fs.Int("path-len", 0, "Maximum path length constraint")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert create-intermediate [flags]")
+		fmt.Println("")
+		fmt.Println("Generate an intermediate CA certificate signed by an existing CA.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	// Parse arguments starting from index 2 (skip "vibecert" and "create-intermediate")
+	fs.Parse(os.Args[2:])
+
+	if *commonName == "" || *organization == "" || *country == "" || *caSerial == "" {
+		fmt.Println("Error: cn, org, country, and ca-serial are required")
+		fmt.Println("Example: --cn 'My Intermediate CA' --org 'My Organization' --country US --ca-serial a1b2c3d4")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Ensure directories exist
+	if err := os.MkdirAll("data/certs", 0755); err != nil {
+		log.Fatalf("Failed to create data/certs directory: %v", err)
+	}
+	if err := os.MkdirAll("data/keys", 0755); err != nil {
+		log.Fatalf("Failed to create data/keys directory: %v", err)
+	}
+
+	// Load parent CA certificate and key
+	caCertPath := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", *caSerial))
+	caKeyPath := filepath.Join("data", "keys", fmt.Sprintf("%s.key", *caSerial))
+
+	caCert, err := loadCertificateFromFile(caCertPath)
+	if err != nil {
+		log.Fatalf("Failed to load parent CA certificate: %v", err)
+	}
+
+	// Prompt for parent CA key password
+	fmt.Print("Enter password for parent CA private key: ")
+	caPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read CA password: %v", err)
+	}
+	fmt.Println() // Add newline after password input
+	caPassword := string(caPasswordBytes)
+
+	caPrivateKey, err := loadEncryptedPrivateKey(caKeyPath, caPassword)
+	if err != nil {
+		log.Fatalf("Failed to load parent CA private key: %v", err)
+	}
+
+	// Verify path length constraints
+	if !caCert.IsCA {
+		log.Fatal("Parent certificate is not a CA certificate")
+	}
+
+	// Check if parent CA allows signing intermediate CAs
+	if caCert.MaxPathLenZero {
+		log.Fatal("Parent CA has path length constraint of 0 - cannot sign intermediate CAs")
+	}
+
+	if *pathLen >= caCert.MaxPathLen {
+		log.Fatalf("Requested path length (%d) must be less than parent CA path length (%d)", *pathLen, caCert.MaxPathLen)
+	}
+
+	// Generate unique serial number
+	serialNum, err := generateUniqueSerial()
+	if err != nil {
+		log.Fatalf("Failed to generate unique serial number: %v", err)
+	}
+
+	// Prompt for password for new intermediate key
+	fmt.Print("Enter password to encrypt new intermediate private key: ")
+	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read password: %v", err)
+	}
+	fmt.Println() // Add newline after password input
+	password := string(passwordBytes)
+
+	if len(password) == 0 {
+		fmt.Println("Error: password cannot be empty")
+		os.Exit(1)
+	}
+
+	// Generate key pair for intermediate certificate
+	var privateKey interface{}
+
+	switch *keyType {
+	case "ecc":
+		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case "rsa-2048":
+		privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "rsa-3072":
+		privateKey, err = rsa.GenerateKey(rand.Reader, 3072)
+	case "rsa-4096":
+		privateKey, err = rsa.GenerateKey(rand.Reader, 4096)
+	default:
+		fmt.Printf("Error: unsupported key type '%s'\n", *keyType)
+		fmt.Println("Supported types: ecc, rsa-2048, rsa-3072, rsa-4096")
+		os.Exit(1)
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to generate private key: %v", err)
+	}
+
+	// Create subject distinguished name
+	subjectDN := pkix.Name{
+		CommonName:   *commonName,
+		Organization: []string{*organization},
+		Country:      []string{*country},
+	}
+
+	// Create certificate template for intermediate CA
+	template := x509.Certificate{
+		SerialNumber: serialNum,
+		Subject:      subjectDN,
+		Issuer:       caCert.Subject, // Issued by parent CA
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(0, 0, *validDays),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            *pathLen,
+		MaxPathLenZero:        *pathLen == 0,
+	}
+
+	// Set key usage based on flags
+	if *keyCertSign {
+		template.KeyUsage |= x509.KeyUsageCertSign
+	}
+	if *crlSign {
+		template.KeyUsage |= x509.KeyUsageCRLSign
+	}
+	if *ocspSign {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning)
+	}
+
+	// Generate certificate (signed by parent CA)
+	var publicKey interface{}
+	switch k := privateKey.(type) {
+	case *ecdsa.PrivateKey:
+		publicKey = &k.PublicKey
+	case *rsa.PrivateKey:
+		publicKey = &k.PublicKey
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, caCert, publicKey, caPrivateKey)
+	if err != nil {
+		log.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	// Generate file names based on serial number
+	serialStr := fmt.Sprintf("%x", serialNum)
+	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
+	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
+
+	// Save private key (encrypted)
+	if err := saveEncryptedPrivateKey(keyFile, privateKey, password); err != nil {
+		log.Fatalf("Failed to save private key: %v", err)
+	}
+
+	// Save certificate
+	if err := saveCertificate(certFile, certBytes); err != nil {
+		log.Fatalf("Failed to save certificate: %v", err)
+	}
+
+	fmt.Printf("Intermediate CA certificate and key generated successfully:\n")
+	fmt.Printf("  Private key: %s (encrypted)\n", keyFile)
+	fmt.Printf("  Certificate: %s\n", certFile)
+	fmt.Printf("  Serial number: %s\n", serialStr)
+	fmt.Printf("  Parent CA: %s\n", *caSerial)
+	fmt.Printf("  Key type: %s\n", *keyType)
+	fmt.Printf("  Valid for: %d days\n", *validDays)
+	fmt.Printf("  Path length constraint: %d\n", *pathLen)
+}
+
 func generateUniqueSerial() (*big.Int, error) {
 	// Generate a random 128-bit serial number
 	max := new(big.Int)
@@ -454,4 +652,65 @@ func saveCertificate(filename string, certBytes []byte) error {
 		Type:  "CERTIFICATE",
 		Bytes: certBytes,
 	})
+}
+
+func loadCertificateFromFile(filePath string) (*x509.Certificate, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the PEM block (skip text representation)
+	var certPEM []byte
+	for {
+		block, rest := pem.Decode(data)
+		if block == nil {
+			break
+		}
+		if block.Type == "CERTIFICATE" {
+			certPEM = block.Bytes
+			break
+		}
+		data = rest
+	}
+
+	if certPEM == nil {
+		return nil, fmt.Errorf("no certificate found in file")
+	}
+
+	return x509.ParseCertificate(certPEM)
+}
+
+func loadEncryptedPrivateKey(filePath string, password string) (interface{}, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+
+	var keyBytes []byte
+	if x509.IsEncryptedPEMBlock(block) {
+		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt private key: %v", err)
+		}
+	} else {
+		keyBytes = block.Bytes
+	}
+
+	// Try to parse as different key types
+	switch block.Type {
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(keyBytes)
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(keyBytes)
+	case "PRIVATE KEY":
+		return x509.ParsePKCS8PrivateKey(keyBytes)
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s", block.Type)
+	}
 }
