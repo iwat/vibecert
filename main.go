@@ -2,42 +2,57 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
+	"encoding/hex"
 	"encoding/pem"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"math/big"
-	"net"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/ssh/terminal"
 	"software.sslmate.com/src/go-pkcs12"
 )
 
 type Certificate struct {
+	SerialNumber string
 	Subject      string
 	Issuer       string
-	SerialNum    string
-	FilePath     string
-	X509Cert     *x509.Certificate
-	Children     []*Certificate
+	NotBefore    time.Time
+	NotAfter     time.Time
+	PEMData      string
+	KeyHash      string
 	IsSelfSigned bool
 	IsRoot       bool
 	IsCA         bool
+	X509Cert     *x509.Certificate
+	Children     []*Certificate
 }
 
+type KeyPair struct {
+	PublicKeyHash string
+	PEMData       string
+}
+
+var db *sql.DB
+
 func main() {
+	if err := initDatabase(); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer db.Close()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -54,6 +69,14 @@ func main() {
 		runCreateIntermediateCommand()
 	case "create-leaf":
 		runCreateLeafCommand()
+	case "import":
+		runImportCommand()
+	case "export-cert":
+		runExportCertCommand()
+	case "export-key":
+		runExportKeyCommand()
+	case "reencrypt-key":
+		runReencryptKeyCommand()
 	case "export-pkcs12":
 		runExportPKCS12Command()
 	case "help", "-h", "--help":
@@ -73,761 +96,592 @@ func printUsage() {
 	fmt.Println("  create-root      Generate a new root certificate and key")
 	fmt.Println("  create-intermediate Generate an intermediate CA certificate")
 	fmt.Println("  create-leaf      Generate an end-entity certificate")
+	fmt.Println("  import           Import certificate and optional key")
+	fmt.Println("  export-cert      Export certificate with human-readable content")
+	fmt.Println("  export-key       Export encrypted private key")
+	fmt.Println("  reencrypt-key    Change private key password")
 	fmt.Println("  export-pkcs12    Export certificate and key as PKCS#12 file")
 	fmt.Println("  help             Show this help message")
 	fmt.Println("")
 	fmt.Println("For command-specific help, use: vibecert <command> --help")
 }
 
-func runTreeCommand() {
-	certs, err := loadCertificates("data/certs")
+func initDatabase() error {
+	// Ensure data directory exists
+	if err := os.MkdirAll("data", 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %v", err)
+	}
+
+	var err error
+	db, err = sql.Open("sqlite3", "data/vibecert.db")
 	if err != nil {
-		log.Fatal("Error loading certificates:", err)
+		return err
 	}
 
-	if len(certs) == 0 {
-		fmt.Println("No certificates found in data/certs directory")
-		return
+	// Create certificates table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS certificates (
+			serial_number TEXT PRIMARY KEY,
+			subject TEXT NOT NULL,
+			issuer TEXT NOT NULL,
+			not_before DATETIME NOT NULL,
+			not_after DATETIME NOT NULL,
+			pem_data TEXT NOT NULL,
+			key_hash TEXT,
+			is_self_signed BOOLEAN NOT NULL,
+			is_root BOOLEAN NOT NULL,
+			is_ca BOOLEAN NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
 	}
 
-	tree := buildCertificateTree(certs)
+	// Create keys table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS keys (
+			public_key_hash TEXT PRIMARY KEY,
+			pem_data TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func calculatePublicKeyHash(cert *x509.Certificate) string {
+	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(hash[:])
+}
+
+func runTreeCommand() {
+	certificates, err := loadCertificatesFromDB()
+	if err != nil {
+		log.Fatalf("Failed to load certificates: %v", err)
+	}
+
+	tree := buildCertificateTree(certificates)
+	sortCertificates(tree)
 	printCertificateTree(tree, 0)
 }
 
-func loadCertificates(dirPath string) ([]*Certificate, error) {
+func loadCertificatesFromDB() ([]*Certificate, error) {
+	rows, err := db.Query(`
+		SELECT serial_number, subject, issuer, not_before, not_after,
+		       pem_data, key_hash, is_self_signed, is_root, is_ca
+		FROM certificates
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var certificates []*Certificate
+	for rows.Next() {
+		cert := &Certificate{}
+		var keyHash sql.NullString
 
-	err := filepath.WalkDir(dirPath, func(path string, d fs.DirEntry, err error) error {
+		err := rows.Scan(&cert.SerialNumber, &cert.Subject, &cert.Issuer,
+			&cert.NotBefore, &cert.NotAfter, &cert.PEMData, &keyHash,
+			&cert.IsSelfSigned, &cert.IsRoot, &cert.IsCA)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		if d.IsDir() {
-			return nil
+		if keyHash.Valid {
+			cert.KeyHash = keyHash.String
 		}
 
-		// Check if file has certificate extension
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".crt" && ext != ".cer" && ext != ".pem" {
-			return nil
+		// Parse the X.509 certificate
+		block, _ := pem.Decode([]byte(cert.PEMData))
+		if block == nil {
+			continue
 		}
-
-		cert, err := loadCertificate(path)
+		cert.X509Cert, err = x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			fmt.Printf("Warning: Could not load certificate from %s: %v\n", path, err)
-			return nil
+			continue
 		}
 
 		certificates = append(certificates, cert)
-		return nil
-	})
+	}
 
-	return certificates, err
+	return certificates, nil
 }
 
-func loadCertificate(filePath string) (*Certificate, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Try to decode PEM first
-	block, _ := pem.Decode(data)
-	var certData []byte
-
-	if block != nil && block.Type == "CERTIFICATE" {
-		certData = block.Bytes
-	} else {
-		// Assume DER format
-		certData = data
-	}
-
-	x509Cert, err := x509.ParseCertificate(certData)
-	if err != nil {
-		return nil, err
-	}
-
-	serialNum := fmt.Sprintf("%032x", x509Cert.SerialNumber)
-
-	isSelfSigned := x509Cert.Subject.String() == x509Cert.Issuer.String()
-
-	cert := &Certificate{
-		Subject:      x509Cert.Subject.String(),
-		Issuer:       x509Cert.Issuer.String(),
-		SerialNum:    serialNum,
-		FilePath:     filePath,
-		X509Cert:     x509Cert,
-		Children:     make([]*Certificate, 0),
-		IsSelfSigned: isSelfSigned,
-		IsRoot:       false,
-		IsCA:         x509Cert.IsCA,
-	}
-
-	return cert, nil
-}
-
-func buildCertificateTree(certs []*Certificate) []*Certificate {
-	// Create a map for quick lookup by subject
-	subjectMap := make(map[string]*Certificate)
-	for _, cert := range certs {
-		subjectMap[cert.Subject] = cert
+func buildCertificateTree(certificates []*Certificate) []*Certificate {
+	certMap := make(map[string]*Certificate)
+	for _, cert := range certificates {
+		certMap[cert.SerialNumber] = cert
 	}
 
 	var roots []*Certificate
-
-	// Build parent-child relationships
-	for _, cert := range certs {
-		// If issuer equals subject, it's a self-signed root certificate
+	for _, cert := range certificates {
 		if cert.IsSelfSigned {
-			cert.IsRoot = true
 			roots = append(roots, cert)
 		} else {
-			// Find parent certificate by matching issuer with subject
-			if parent, exists := subjectMap[cert.Issuer]; exists {
-				parent.Children = append(parent.Children, cert)
-			} else {
-				// No parent found, treat as root (externally signed certificate)
-				cert.IsRoot = true
-				roots = append(roots, cert)
+			// Find parent by matching issuer
+			for _, parent := range certificates {
+				if parent.Subject == cert.Issuer {
+					parent.Children = append(parent.Children, cert)
+					break
+				}
 			}
 		}
-	}
-
-	// Sort roots and children for consistent output
-	sortCertificates(roots)
-	for _, cert := range certs {
-		sortCertificates(cert.Children)
 	}
 
 	return roots
 }
 
-func sortCertificates(certs []*Certificate) {
-	sort.Slice(certs, func(i, j int) bool {
-		return certs[i].Subject < certs[j].Subject
+func sortCertificates(certificates []*Certificate) {
+	sort.Slice(certificates, func(i, j int) bool {
+		return certificates[i].Subject < certificates[j].Subject
 	})
+
+	for _, cert := range certificates {
+		sortCertificates(cert.Children)
+	}
 }
 
-func printCertificateTree(certs []*Certificate, level int) {
-	for _, cert := range certs {
-		indent := strings.Repeat("  ", level)
-		indicator := strings.Builder{}
-		hasIndicator := false
+func printCertificateTree(certificates []*Certificate, indent int) {
+	indentStr := strings.Repeat("  ", indent)
 
-		if cert.IsRoot {
-			if cert.IsSelfSigned {
-				if !hasIndicator {
-					indicator.WriteString(" ")
-					hasIndicator = true
-				}
-				indicator.WriteString("[SELF-SIGNED]")
-			}
-		}
-		if cert.IsCA {
-			if !hasIndicator {
-				indicator.WriteString(" ")
-				hasIndicator = true
-			}
-			indicator.WriteString("[CA]")
+	for _, cert := range certificates {
+		marker := "├─"
+		if indent == 0 {
+			marker = "└─"
 		}
 
-		fmt.Printf("%s%s (%s)%s\n", indent, cert.Subject, cert.SerialNum, indicator.String())
+		keyStatus := "No Key"
+		if cert.KeyHash != "" {
+			keyStatus = "Has Key"
+		}
+
+		fmt.Printf("%s%s %s (Serial: %s) [%s]\n",
+			indentStr, marker, cert.Subject, cert.SerialNumber, keyStatus)
 
 		if len(cert.Children) > 0 {
-			printCertificateTree(cert.Children, level+1)
+			printCertificateTree(cert.Children, indent+1)
 		}
 	}
 }
 
-func runCreateRootCommand() {
-	fs := flag.NewFlagSet("create-root", flag.ExitOnError)
+func runImportCommand() {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
 
 	var (
-		keyType      = fs.String("key-type", "ecc", "Key type: ecc, rsa-2048, rsa-3072, or rsa-4096")
-		commonName   = fs.String("cn", "", "Common Name (required)")
-		organization = fs.String("org", "", "Organization name (required)")
-		country      = fs.String("country", "", "Country code (required, e.g., US)")
-		validDays    = fs.Int("valid-days", 3650, "Certificate validity period in days")
-		keyCertSign  = fs.Bool("key-cert-sign", true, "Allow certificate signing")
-		crlSign      = fs.Bool("crl-sign", true, "Allow CRL signing")
-		ocspSign     = fs.Bool("ocsp-sign", true, "Allow OCSP signing")
-		pathLen      = fs.Int("path-len", 1, "Maximum path length constraint")
+		certFile = fs.String("cert", "", "Certificate file path (required)")
+		keyFile  = fs.String("key", "", "Private key file path (optional)")
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert create-root [flags]")
+		fmt.Println("Usage: vibecert import [flags]")
 		fmt.Println("")
-		fmt.Println("Generate a new root certificate and private key.")
+		fmt.Println("Import a certificate and optionally its private key.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	// Parse arguments starting from index 2 (skip "vibecert" and "create-root")
 	fs.Parse(os.Args[2:])
 
-	if *commonName == "" || *organization == "" || *country == "" {
-		fmt.Println("Error: cn, org, and country are required")
-		fmt.Println("Example: --cn 'My Root CA' --org 'My Organization' --country US")
+	if *certFile == "" {
+		fmt.Println("Error: cert file is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Ensure directories exist
-	if err := os.MkdirAll("data/certs", 0755); err != nil {
-		log.Fatalf("Failed to create data/certs directory: %v", err)
-	}
-	if err := os.MkdirAll("data/keys", 0755); err != nil {
-		log.Fatalf("Failed to create data/keys directory: %v", err)
-	}
-
-	// Generate unique serial number
-	serialNum, err := generateUniqueSerial()
+	// Load certificate
+	certData, err := os.ReadFile(*certFile)
 	if err != nil {
-		log.Fatalf("Failed to generate unique serial number: %v", err)
+		log.Fatalf("Failed to read certificate file: %v", err)
 	}
 
-	// Prompt for password
-	fmt.Print("Enter password to encrypt private key: ")
-	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	cert, err := parseCertificateFromPEM(string(certData))
 	if err != nil {
-		log.Fatalf("Failed to read password: %v", err)
-	}
-	fmt.Println() // Add newline after password input
-	password := string(passwordBytes)
-
-	if len(password) == 0 {
-		fmt.Println("Error: password cannot be empty")
-		os.Exit(1)
+		log.Fatalf("Failed to parse certificate: %v", err)
 	}
 
-	// Generate key pair
-	var privateKey any
+	// Calculate key hash
+	keyHash := calculatePublicKeyHash(cert.X509Cert)
 
-	switch *keyType {
-	case "ecc":
-		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	case "rsa-2048":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
-	case "rsa-3072":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 3072)
-	case "rsa-4096":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 4096)
-	default:
-		fmt.Printf("Error: unsupported key type '%s'\n", *keyType)
-		fmt.Println("Supported types: ecc, rsa-2048, rsa-3072, rsa-4096")
-		os.Exit(1)
+	// Import key if provided
+	if *keyFile != "" {
+		keyData, err := os.ReadFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to read key file: %v", err)
+		}
+
+		// Store the key
+		_, err = db.Exec(`
+			INSERT OR REPLACE INTO keys (public_key_hash, pem_data)
+			VALUES (?, ?)
+		`, keyHash, string(keyData))
+		if err != nil {
+			log.Fatalf("Failed to store key: %v", err)
+		}
+
+		cert.KeyHash = keyHash
 	}
 
+	// Store certificate
+	_, err = db.Exec(`
+		INSERT OR REPLACE INTO certificates
+		(serial_number, subject, issuer, not_before, not_after,
+		 pem_data, key_hash, is_self_signed, is_root, is_ca)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, cert.SerialNumber, cert.Subject, cert.Issuer, cert.NotBefore, cert.NotAfter,
+		cert.PEMData, cert.KeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
 	if err != nil {
-		log.Fatalf("Failed to generate private key: %v", err)
+		log.Fatalf("Failed to store certificate: %v", err)
 	}
 
-	// Create subject distinguished name
-	subjectDN := pkix.Name{
-		CommonName:   *commonName,
-		Organization: []string{*organization},
-		Country:      []string{*country},
+	fmt.Printf("Certificate imported successfully:\n")
+	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
+	fmt.Printf("  Subject: %s\n", cert.Subject)
+	if cert.KeyHash != "" {
+		fmt.Printf("  Private key: imported\n")
+	} else {
+		fmt.Printf("  Private key: not provided\n")
 	}
-
-	// Create certificate template
-	template := x509.Certificate{
-		SerialNumber: serialNum,
-		Subject:      subjectDN,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(0, 0, *validDays),
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLen:            *pathLen,
-		MaxPathLenZero:        *pathLen == 0,
-	}
-
-	// Set key usage based on flags
-	if *keyCertSign {
-		template.KeyUsage |= x509.KeyUsageCertSign
-	}
-	if *crlSign {
-		template.KeyUsage |= x509.KeyUsageCRLSign
-	}
-	if *ocspSign {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning)
-	}
-
-	// Generate certificate (self-signed for root)
-	var publicKey any
-	switch k := privateKey.(type) {
-	case *ecdsa.PrivateKey:
-		publicKey = &k.PublicKey
-	case *rsa.PrivateKey:
-		publicKey = &k.PublicKey
-	}
-
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
-	if err != nil {
-		log.Fatalf("Failed to create certificate: %v", err)
-	}
-
-	// Generate file names based on serial number
-	serialStr := fmt.Sprintf("%032x", serialNum)
-	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
-	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
-
-	// Save private key (encrypted)
-	if err := saveEncryptedPrivateKey(keyFile, privateKey, password); err != nil {
-		log.Fatalf("Failed to save private key: %v", err)
-	}
-
-	// Save certificate
-	if err := saveCertificate(certFile, certBytes); err != nil {
-		log.Fatalf("Failed to save certificate: %v", err)
-	}
-
-	fmt.Printf("Root certificate and key generated successfully:\n")
-	fmt.Printf("  Private key: %s (encrypted)\n", keyFile)
-	fmt.Printf("  Certificate: %s\n", certFile)
-	fmt.Printf("  Serial number: %s\n", serialStr)
-	fmt.Printf("  Key type: %s\n", *keyType)
-	fmt.Printf("  Valid for: %d days\n", *validDays)
 }
 
-func runCreateIntermediateCommand() {
-	fs := flag.NewFlagSet("create-intermediate", flag.ExitOnError)
+func parseCertificateFromPEM(pemData string) (*Certificate, error) {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("invalid certificate PEM data")
+	}
+
+	x509Cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	cert := &Certificate{
+		SerialNumber: fmt.Sprintf("%032x", x509Cert.SerialNumber),
+		Subject:      x509Cert.Subject.String(),
+		Issuer:       x509Cert.Issuer.String(),
+		NotBefore:    x509Cert.NotBefore,
+		NotAfter:     x509Cert.NotAfter,
+		PEMData:      pemData,
+		IsSelfSigned: x509Cert.Subject.String() == x509Cert.Issuer.String(),
+		IsRoot:       x509Cert.IsCA && x509Cert.Subject.String() == x509Cert.Issuer.String(),
+		IsCA:         x509Cert.IsCA,
+		X509Cert:     x509Cert,
+	}
+
+	return cert, nil
+}
+
+func runExportCertCommand() {
+	fs := flag.NewFlagSet("export-cert", flag.ExitOnError)
 
 	var (
-		keyType      = fs.String("key-type", "ecc", "Key type: ecc, rsa-2048, rsa-3072, or rsa-4096")
-		commonName   = fs.String("cn", "", "Common Name (required)")
-		organization = fs.String("org", "", "Organization name (required)")
-		country      = fs.String("country", "", "Country code (required, e.g., US)")
-		validDays    = fs.Int("valid-days", 1825, "Certificate validity period in days (default: 5 years)")
-		caSerial     = fs.String("ca-serial", "", "Serial number of parent CA certificate (required)")
-		keyCertSign  = fs.Bool("key-cert-sign", true, "Allow certificate signing")
-		crlSign      = fs.Bool("crl-sign", true, "Allow CRL signing")
-		ocspSign     = fs.Bool("ocsp-sign", true, "Allow OCSP signing")
-		pathLen      = fs.Int("path-len", 0, "Maximum path length constraint")
+		serial     = fs.String("serial", "", "Certificate serial number (required)")
+		outputFile = fs.String("output", "", "Output file path (default: {serial}.txt)")
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert create-intermediate [flags]")
+		fmt.Println("Usage: vibecert export-cert [flags]")
 		fmt.Println("")
-		fmt.Println("Generate an intermediate CA certificate signed by an existing CA.")
+		fmt.Println("Export certificate with human-readable content similar to 'openssl x509 -text'.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	// Parse arguments starting from index 2 (skip "vibecert" and "create-intermediate")
 	fs.Parse(os.Args[2:])
 
-	if *commonName == "" || *organization == "" || *country == "" || *caSerial == "" {
-		fmt.Println("Error: cn, org, country, and ca-serial are required")
-		fmt.Println("Example: --cn 'My Intermediate CA' --org 'My Organization' --country US --ca-serial a1b2c3d4")
+	if *serial == "" {
+		fmt.Println("Error: serial number is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Ensure directories exist
-	if err := os.MkdirAll("data/certs", 0755); err != nil {
-		log.Fatalf("Failed to create data/certs directory: %v", err)
-	}
-	if err := os.MkdirAll("data/keys", 0755); err != nil {
-		log.Fatalf("Failed to create data/keys directory: %v", err)
-	}
-
-	// Load parent CA certificate and key
-	caCertPath := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", *caSerial))
-	caKeyPath := filepath.Join("data", "keys", fmt.Sprintf("%s.key", *caSerial))
-
-	caCert, err := loadCertificateFromFile(caCertPath)
+	// Load certificate from database
+	var pemData string
+	err := db.QueryRow("SELECT pem_data FROM certificates WHERE serial_number = ?", *serial).Scan(&pemData)
 	if err != nil {
-		log.Fatalf("Failed to load parent CA certificate: %v", err)
+		if err == sql.ErrNoRows {
+			log.Fatalf("Certificate with serial %s not found", *serial)
+		}
+		log.Fatalf("Failed to load certificate: %v", err)
 	}
 
-	// Prompt for parent CA key password
-	fmt.Print("Enter password for parent CA private key: ")
-	caPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	cert, err := parseCertificateFromPEM(pemData)
 	if err != nil {
-		log.Fatalf("Failed to read CA password: %v", err)
+		log.Fatalf("Failed to parse certificate: %v", err)
 	}
-	fmt.Println() // Add newline after password input
-	caPassword := string(caPasswordBytes)
 
-	caPrivateKey, err := loadEncryptedPrivateKey(caKeyPath, caPassword)
+	// Generate human-readable output
+	output := generateCertificateText(cert)
+
+	// Determine output file
+	outputPath := *outputFile
+	if outputPath == "" {
+		outputPath = fmt.Sprintf("%s.txt", *serial)
+	}
+
+	// Write to file
+	err = os.WriteFile(outputPath, []byte(output), 0644)
 	if err != nil {
-		log.Fatalf("Failed to load parent CA private key: %v", err)
+		log.Fatalf("Failed to write output file: %v", err)
 	}
 
-	// Verify path length constraints
-	if !caCert.IsCA {
-		log.Fatal("Parent certificate is not a CA certificate")
-	}
-
-	// Check if parent CA allows signing intermediate CAs
-	if caCert.MaxPathLenZero {
-		log.Fatal("Parent CA has path length constraint of 0 - cannot sign intermediate CAs")
-	}
-
-	if *pathLen >= caCert.MaxPathLen {
-		log.Fatalf("Requested path length (%d) must be less than parent CA path length (%d)", *pathLen, caCert.MaxPathLen)
-	}
-
-	// Generate unique serial number
-	serialNum, err := generateUniqueSerial()
-	if err != nil {
-		log.Fatalf("Failed to generate unique serial number: %v", err)
-	}
-
-	// Prompt for password for new intermediate key
-	fmt.Print("Enter password to encrypt new intermediate private key: ")
-	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read password: %v", err)
-	}
-	fmt.Println() // Add newline after password input
-	password := string(passwordBytes)
-
-	if len(password) == 0 {
-		fmt.Println("Error: password cannot be empty")
-		os.Exit(1)
-	}
-
-	// Generate key pair for intermediate certificate
-	var privateKey any
-
-	switch *keyType {
-	case "ecc":
-		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	case "rsa-2048":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
-	case "rsa-3072":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 3072)
-	case "rsa-4096":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 4096)
-	default:
-		fmt.Printf("Error: unsupported key type '%s'\n", *keyType)
-		fmt.Println("Supported types: ecc, rsa-2048, rsa-3072, rsa-4096")
-		os.Exit(1)
-	}
-
-	if err != nil {
-		log.Fatalf("Failed to generate private key: %v", err)
-	}
-
-	// Create subject distinguished name
-	subjectDN := pkix.Name{
-		CommonName:   *commonName,
-		Organization: []string{*organization},
-		Country:      []string{*country},
-	}
-
-	// Create certificate template for intermediate CA
-	template := x509.Certificate{
-		SerialNumber: serialNum,
-		Subject:      subjectDN,
-		Issuer:       caCert.Subject, // Issued by parent CA
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(0, 0, *validDays),
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLen:            *pathLen,
-		MaxPathLenZero:        *pathLen == 0,
-	}
-
-	// Set key usage based on flags
-	if *keyCertSign {
-		template.KeyUsage |= x509.KeyUsageCertSign
-	}
-	if *crlSign {
-		template.KeyUsage |= x509.KeyUsageCRLSign
-	}
-	if *ocspSign {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning)
-	}
-
-	// Generate certificate (signed by parent CA)
-	var publicKey any
-	switch k := privateKey.(type) {
-	case *ecdsa.PrivateKey:
-		publicKey = &k.PublicKey
-	case *rsa.PrivateKey:
-		publicKey = &k.PublicKey
-	}
-
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, caCert, publicKey, caPrivateKey)
-	if err != nil {
-		log.Fatalf("Failed to create certificate: %v", err)
-	}
-
-	// Generate file names based on serial number
-	serialStr := fmt.Sprintf("%032x", serialNum)
-	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
-	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
-
-	// Save private key (encrypted)
-	if err := saveEncryptedPrivateKey(keyFile, privateKey, password); err != nil {
-		log.Fatalf("Failed to save private key: %v", err)
-	}
-
-	// Save certificate
-	if err := saveCertificate(certFile, certBytes); err != nil {
-		log.Fatalf("Failed to save certificate: %v", err)
-	}
-
-	fmt.Printf("Intermediate CA certificate and key generated successfully:\n")
-	fmt.Printf("  Private key: %s (encrypted)\n", keyFile)
-	fmt.Printf("  Certificate: %s\n", certFile)
-	fmt.Printf("  Serial number: %s\n", serialStr)
-	fmt.Printf("  Parent CA: %s\n", *caSerial)
-	fmt.Printf("  Key type: %s\n", *keyType)
-	fmt.Printf("  Valid for: %d days\n", *validDays)
-	fmt.Printf("  Path length constraint: %d\n", *pathLen)
+	fmt.Printf("Certificate exported to: %s\n", outputPath)
 }
 
-func runCreateLeafCommand() {
-	fs := flag.NewFlagSet("create-leaf", flag.ExitOnError)
+func generateCertificateText(cert *Certificate) string {
+	var builder strings.Builder
+
+	builder.WriteString("Certificate:\n")
+	builder.WriteString("    Data:\n")
+	builder.WriteString(fmt.Sprintf("        Version: %d\n", cert.X509Cert.Version))
+	builder.WriteString(fmt.Sprintf("        Serial Number: %s\n", cert.SerialNumber))
+	builder.WriteString("    Signature Algorithm: " + cert.X509Cert.SignatureAlgorithm.String() + "\n")
+	builder.WriteString("        Issuer: " + cert.Issuer + "\n")
+	builder.WriteString("        Validity:\n")
+	builder.WriteString(fmt.Sprintf("            Not Before: %s\n", cert.NotBefore.Format("Jan 2 15:04:05 2006 MST")))
+	builder.WriteString(fmt.Sprintf("            Not After:  %s\n", cert.NotAfter.Format("Jan 2 15:04:05 2006 MST")))
+	builder.WriteString("        Subject: " + cert.Subject + "\n")
+
+	if cert.IsCA {
+		builder.WriteString("        CA: TRUE\n")
+	}
+
+	if len(cert.X509Cert.DNSNames) > 0 {
+		builder.WriteString("        Subject Alternative Name:\n")
+		for _, dns := range cert.X509Cert.DNSNames {
+			builder.WriteString(fmt.Sprintf("            DNS:%s\n", dns))
+		}
+	}
+
+	builder.WriteString("\n" + cert.PEMData)
+
+	return builder.String()
+}
+
+func runExportKeyCommand() {
+	fs := flag.NewFlagSet("export-key", flag.ExitOnError)
 
 	var (
-		keyType      = fs.String("key-type", "ecc", "Key type: ecc, rsa-2048, rsa-3072, or rsa-4096")
-		commonName   = fs.String("cn", "", "Common Name (required)")
-		organization = fs.String("org", "", "Organization name (required)")
-		country      = fs.String("country", "", "Country code (required, e.g., US)")
-		validDays    = fs.Int("valid-days", 365, "Certificate validity period in days (default: 1 year)")
-		caSerial     = fs.String("ca-serial", "", "Serial number of parent CA certificate (required)")
-		serverAuth   = fs.Bool("server-auth", false, "Enable TLS server authentication")
-		clientAuth   = fs.Bool("client-auth", false, "Enable TLS client authentication")
-		codeSigning  = fs.Bool("code-signing", false, "Enable code signing")
-		emailProtect = fs.Bool("email-protection", false, "Enable email protection")
-		sanDNS       = fs.String("san-dns", "", "DNS names for SAN (comma-separated)")
-		sanIP        = fs.String("san-ip", "", "IP addresses for SAN (comma-separated)")
-		sanEmail     = fs.String("san-email", "", "Email addresses for SAN (comma-separated)")
+		serial     = fs.String("serial", "", "Certificate serial number (required)")
+		outputFile = fs.String("output", "", "Output key file path (default: {serial}.key)")
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert create-leaf [flags]")
+		fmt.Println("Usage: vibecert export-key [flags]")
 		fmt.Println("")
-		fmt.Println("Generate an end-entity certificate signed by an existing CA.")
+		fmt.Println("Export the encrypted private key for a certificate.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	// Parse arguments starting from index 2 (skip "vibecert" and "create-leaf")
 	fs.Parse(os.Args[2:])
 
-	if *commonName == "" || *organization == "" || *country == "" || *caSerial == "" {
-		fmt.Println("Error: cn, org, country, and ca-serial are required")
-		fmt.Println("Example: --cn 'server.example.com' --org 'My Organization' --country US --ca-serial a1b2c3d4")
+	if *serial == "" {
+		fmt.Println("Error: serial number is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Ensure directories exist
-	if err := os.MkdirAll("data/certs", 0755); err != nil {
-		log.Fatalf("Failed to create data/certs directory: %v", err)
-	}
-	if err := os.MkdirAll("data/keys", 0755); err != nil {
-		log.Fatalf("Failed to create data/keys directory: %v", err)
-	}
-
-	// Load parent CA certificate and key
-	caCertPath := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", *caSerial))
-	caKeyPath := filepath.Join("data", "keys", fmt.Sprintf("%s.key", *caSerial))
-
-	caCert, err := loadCertificateFromFile(caCertPath)
+	// Load certificate to get key hash
+	var keyHash sql.NullString
+	err := db.QueryRow("SELECT key_hash FROM certificates WHERE serial_number = ?", *serial).Scan(&keyHash)
 	if err != nil {
-		log.Fatalf("Failed to load parent CA certificate: %v", err)
+		if err == sql.ErrNoRows {
+			log.Fatalf("Certificate with serial %s not found", *serial)
+		}
+		log.Fatalf("Failed to load certificate: %v", err)
 	}
 
-	// Prompt for parent CA key password
-	fmt.Print("Enter password for parent CA private key: ")
-	caPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if !keyHash.Valid {
+		log.Fatalf("No private key associated with certificate %s", *serial)
+	}
+
+	// Load key data
+	var keyData string
+	err = db.QueryRow("SELECT pem_data FROM keys WHERE public_key_hash = ?", keyHash.String).Scan(&keyData)
 	if err != nil {
-		log.Fatalf("Failed to read CA password: %v", err)
+		log.Fatalf("Failed to load private key: %v", err)
 	}
-	fmt.Println() // Add newline after password input
-	caPassword := string(caPasswordBytes)
 
-	caPrivateKey, err := loadEncryptedPrivateKey(caKeyPath, caPassword)
+	// Determine output file
+	outputPath := *outputFile
+	if outputPath == "" {
+		outputPath = fmt.Sprintf("%s.key", *serial)
+	}
+
+	// Write to file
+	err = os.WriteFile(outputPath, []byte(keyData), 0600)
 	if err != nil {
-		log.Fatalf("Failed to load parent CA private key: %v", err)
+		log.Fatalf("Failed to write key file: %v", err)
 	}
 
-	// Verify that parent is a CA
-	if !caCert.IsCA {
-		log.Fatal("Parent certificate is not a CA certificate")
+	fmt.Printf("Private key exported to: %s\n", outputPath)
+}
+
+func runReencryptKeyCommand() {
+	fs := flag.NewFlagSet("reencrypt-key", flag.ExitOnError)
+
+	var (
+		serial = fs.String("serial", "", "Certificate serial number (required)")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert reencrypt-key [flags]")
+		fmt.Println("")
+		fmt.Println("Change the password of a private key.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
 	}
 
-	// Generate unique serial number
-	serialNum, err := generateUniqueSerial()
-	if err != nil {
-		log.Fatalf("Failed to generate unique serial number: %v", err)
-	}
+	fs.Parse(os.Args[2:])
 
-	// Prompt for password for new leaf key
-	fmt.Print("Enter password to encrypt new leaf private key: ")
-	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read password: %v", err)
-	}
-	fmt.Println() // Add newline after password input
-	password := string(passwordBytes)
-
-	if len(password) == 0 {
-		fmt.Println("Error: password cannot be empty")
+	if *serial == "" {
+		fmt.Println("Error: serial number is required")
+		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Generate key pair for leaf certificate
-	var privateKey any
-
-	switch *keyType {
-	case "ecc":
-		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	case "rsa-2048":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
-	case "rsa-3072":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 3072)
-	case "rsa-4096":
-		privateKey, err = rsa.GenerateKey(rand.Reader, 4096)
-	default:
-		fmt.Printf("Error: unsupported key type '%s'\n", *keyType)
-		fmt.Println("Supported types: ecc, rsa-2048, rsa-3072, rsa-4096")
-		os.Exit(1)
-	}
-
+	// Load certificate to get key hash
+	var keyHash sql.NullString
+	err := db.QueryRow("SELECT key_hash FROM certificates WHERE serial_number = ?", *serial).Scan(&keyHash)
 	if err != nil {
-		log.Fatalf("Failed to generate private key: %v", err)
-	}
-
-	// Create subject distinguished name
-	subjectDN := pkix.Name{
-		CommonName:   *commonName,
-		Organization: []string{*organization},
-		Country:      []string{*country},
-	}
-
-	// Create certificate template for end-entity certificate
-	template := x509.Certificate{
-		SerialNumber: serialNum,
-		Subject:      subjectDN,
-		Issuer:       caCert.Subject, // Issued by parent CA
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(0, 0, *validDays),
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{},
-		BasicConstraintsValid: true,
-		IsCA:                  false, // This is an end-entity certificate
-	}
-
-	// Set extended key usage based on flags
-	if *serverAuth {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
-	}
-	if *clientAuth {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
-	}
-	if *codeSigning {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageCodeSigning)
-	}
-	if *emailProtect {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageEmailProtection)
-	}
-
-	// If no extended key usage is specified, default to server auth
-	if len(template.ExtKeyUsage) == 0 {
-		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
-	}
-
-	// Parse and add Subject Alternative Names
-	if *sanDNS != "" {
-		dnsNames := strings.Split(*sanDNS, ",")
-		for i, name := range dnsNames {
-			dnsNames[i] = strings.TrimSpace(name)
+		if err == sql.ErrNoRows {
+			log.Fatalf("Certificate with serial %s not found", *serial)
 		}
-		template.DNSNames = dnsNames
+		log.Fatalf("Failed to load certificate: %v", err)
 	}
 
-	if *sanIP != "" {
-		ipStrs := strings.Split(*sanIP, ",")
-		for _, ipStr := range ipStrs {
-			ip := net.ParseIP(strings.TrimSpace(ipStr))
-			if ip != nil {
-				template.IPAddresses = append(template.IPAddresses, ip)
-			}
+	if !keyHash.Valid {
+		log.Fatalf("No private key associated with certificate %s", *serial)
+	}
+
+	// Load key data
+	var keyData string
+	err = db.QueryRow("SELECT pem_data FROM keys WHERE public_key_hash = ?", keyHash.String).Scan(&keyData)
+	if err != nil {
+		log.Fatalf("Failed to load private key: %v", err)
+	}
+
+	// Get current password
+	fmt.Print("Enter current password: ")
+	currentPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read current password: %v", err)
+	}
+	fmt.Println()
+
+	// Decrypt the key to verify current password
+	privateKey, err := loadPrivateKeyFromPEM(keyData, string(currentPasswordBytes))
+	if err != nil {
+		log.Fatalf("Failed to decrypt private key (wrong password?): %v", err)
+	}
+
+	// Get new password
+	fmt.Print("Enter new password: ")
+	newPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read new password: %v", err)
+	}
+	fmt.Println()
+
+	fmt.Print("Confirm new password: ")
+	confirmPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read password confirmation: %v", err)
+	}
+	fmt.Println()
+
+	newPassword := string(newPasswordBytes)
+	if newPassword != string(confirmPasswordBytes) {
+		log.Fatalf("Passwords do not match")
+	}
+
+	// Re-encrypt with new password
+	newKeyData, err := encryptPrivateKey(privateKey, newPassword)
+	if err != nil {
+		log.Fatalf("Failed to encrypt private key with new password: %v", err)
+	}
+
+	// Update in database
+	_, err = db.Exec("UPDATE keys SET pem_data = ? WHERE public_key_hash = ?", newKeyData, keyHash.String)
+	if err != nil {
+		log.Fatalf("Failed to update private key: %v", err)
+	}
+
+	fmt.Printf("Private key password changed successfully for certificate %s\n", *serial)
+}
+
+func loadPrivateKeyFromPEM(pemData, password string) (interface{}, error) {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+
+	var keyBytes []byte
+	var err error
+
+	if x509.IsEncryptedPEMBlock(block) {
+		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
+		if err != nil {
+			return nil, err
 		}
+	} else {
+		keyBytes = block.Bytes
 	}
 
-	if *sanEmail != "" {
-		emails := strings.Split(*sanEmail, ",")
-		for i, email := range emails {
-			emails[i] = strings.TrimSpace(email)
-		}
-		template.EmailAddresses = emails
+	// Try parsing as different key types
+	if key, err := x509.ParsePKCS1PrivateKey(keyBytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(keyBytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParseECPrivateKey(keyBytes); err == nil {
+		return key, nil
 	}
 
-	// Generate certificate (signed by parent CA)
-	var publicKey any
-	switch k := privateKey.(type) {
-	case *ecdsa.PrivateKey:
-		publicKey = &k.PublicKey
+	return nil, fmt.Errorf("failed to parse private key")
+}
+
+func encryptPrivateKey(privateKey interface{}, password string) (string, error) {
+	var keyBytes []byte
+	var err error
+
+	switch key := privateKey.(type) {
 	case *rsa.PrivateKey:
-		publicKey = &k.PublicKey
+		keyBytes = x509.MarshalPKCS1PrivateKey(key)
+	case *ecdsa.PrivateKey:
+		keyBytes, err = x509.MarshalECPrivateKey(key)
+	default:
+		keyBytes, err = x509.MarshalPKCS8PrivateKey(key)
 	}
 
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, caCert, publicKey, caPrivateKey)
 	if err != nil {
-		log.Fatalf("Failed to create certificate: %v", err)
+		return "", err
 	}
 
-	// Generate file names based on serial number
-	serialStr := fmt.Sprintf("%032x", serialNum)
-	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
-	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
-
-	// Save private key (encrypted)
-	if err := saveEncryptedPrivateKey(keyFile, privateKey, password); err != nil {
-		log.Fatalf("Failed to save private key: %v", err)
+	encryptedBlock, err := x509.EncryptPEMBlock(rand.Reader, "PRIVATE KEY", keyBytes, []byte(password), x509.PEMCipherAES256)
+	if err != nil {
+		return "", err
 	}
 
-	// Save certificate
-	if err := saveCertificate(certFile, certBytes); err != nil {
-		log.Fatalf("Failed to save certificate: %v", err)
-	}
-
-	fmt.Printf("End-entity certificate and key generated successfully:\n")
-	fmt.Printf("  Private key: %s (encrypted)\n", keyFile)
-	fmt.Printf("  Certificate: %s\n", certFile)
-	fmt.Printf("  Serial number: %s\n", serialStr)
-	fmt.Printf("  Parent CA: %s\n", *caSerial)
-	fmt.Printf("  Key type: %s\n", *keyType)
-	fmt.Printf("  Valid for: %d days\n", *validDays)
-	if len(template.DNSNames) > 0 {
-		fmt.Printf("  DNS SANs: %s\n", strings.Join(template.DNSNames, ", "))
-	}
-	if len(template.IPAddresses) > 0 {
-		var ipStrs []string
-		for _, ip := range template.IPAddresses {
-			ipStrs = append(ipStrs, ip.String())
-		}
-		fmt.Printf("  IP SANs: %s\n", strings.Join(ipStrs, ", "))
-	}
-	if len(template.EmailAddresses) > 0 {
-		fmt.Printf("  Email SANs: %s\n", strings.Join(template.EmailAddresses, ", "))
-	}
+	return string(pem.EncodeToMemory(encryptedBlock)), nil
 }
 
 func runExportPKCS12Command() {
 	fs := flag.NewFlagSet("export-pkcs12", flag.ExitOnError)
 
 	var (
-		certSerial     = fs.String("cert-serial", "", "Serial number of certificate to export (required)")
-		outputFile     = fs.String("output", "", "Output PKCS#12 file path (default: data/pkcs12/{serial}.p12)")
+		certSerial     = fs.String("serial", "", "Serial number of certificate to export (required)")
+		outputFile     = fs.String("output", "", "Output PKCS#12 file path (default: {serial}.p12)")
 		friendlyName   = fs.String("name", "", "Friendly name for the certificate (default: certificate CN)")
 		includeCACerts = fs.Bool("include-ca", true, "Include CA certificates in the chain")
 	)
@@ -835,48 +689,24 @@ func runExportPKCS12Command() {
 	fs.Usage = func() {
 		fmt.Println("Usage: vibecert export-pkcs12 [flags]")
 		fmt.Println("")
-		fmt.Println("Export a certificate and its private key as a PKCS#12 file for iOS.")
+		fmt.Println("Export a certificate and its private key as a PKCS#12 file.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	// Parse arguments starting from index 2
 	fs.Parse(os.Args[2:])
 
 	if *certSerial == "" {
-		fmt.Println("Error: cert-serial is required")
-		fmt.Println("Example: --cert-serial a1b2c3d4")
+		fmt.Println("Error: serial number is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Ensure pkcs12 directory exists
-	if err := os.MkdirAll("data/pkcs12", 0755); err != nil {
-		log.Fatalf("Failed to create data/pkcs12 directory: %v", err)
-	}
-
-	// Load certificate
-	certPath := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", *certSerial))
-	keyPath := filepath.Join("data", "keys", fmt.Sprintf("%s.key", *certSerial))
-
-	cert, err := loadCertificateFromFile(certPath)
+	// Load certificate and key
+	cert, privateKey, err := loadCertificateAndKey(*certSerial)
 	if err != nil {
-		log.Fatalf("Failed to load certificate: %v", err)
-	}
-
-	// Prompt for private key password
-	fmt.Print("Enter password for private key: ")
-	keyPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read key password: %v", err)
-	}
-	fmt.Println()
-	keyPassword := string(keyPasswordBytes)
-
-	privateKey, err := loadEncryptedPrivateKey(keyPath, keyPassword)
-	if err != nil {
-		log.Fatalf("Failed to load private key: %v", err)
+		log.Fatalf("Failed to load certificate and key: %v", err)
 	}
 
 	// Prompt for PKCS#12 export password
@@ -896,7 +726,7 @@ func runExportPKCS12Command() {
 	// Set friendly name
 	name := *friendlyName
 	if name == "" {
-		name = cert.Subject.CommonName
+		name = cert.X509Cert.Subject.CommonName
 		if name == "" {
 			name = fmt.Sprintf("Certificate %s", *certSerial)
 		}
@@ -905,14 +735,14 @@ func runExportPKCS12Command() {
 	// Collect CA certificates if requested
 	var caCerts []*x509.Certificate
 	if *includeCACerts {
-		caCerts, err = collectCACertificates(cert)
+		caCerts, err = collectCACertificatesFromDB(cert)
 		if err != nil {
 			fmt.Printf("Warning: Failed to collect CA certificates: %v\n", err)
 		}
 	}
 
 	// Create PKCS#12 data
-	pfxData, err := pkcs12.Modern.Encode(privateKey, cert, caCerts, p12Password)
+	pfxData, err := pkcs12.Modern.Encode(privateKey, cert.X509Cert, caCerts, p12Password)
 	if err != nil {
 		log.Fatalf("Failed to create PKCS#12 data: %v", err)
 	}
@@ -920,7 +750,7 @@ func runExportPKCS12Command() {
 	// Determine output file
 	output := *outputFile
 	if output == "" {
-		output = filepath.Join("data", "pkcs12", fmt.Sprintf("%s.p12", *certSerial))
+		output = fmt.Sprintf("%s.p12", *certSerial)
 	}
 
 	// Save PKCS#12 file
@@ -930,196 +760,483 @@ func runExportPKCS12Command() {
 
 	fmt.Printf("PKCS#12 file exported successfully:\n")
 	fmt.Printf("  File: %s\n", output)
-	fmt.Printf("  Certificate: %s\n", cert.Subject.CommonName)
+	fmt.Printf("  Certificate: %s\n", cert.X509Cert.Subject.CommonName)
 	fmt.Printf("  Friendly name: %s\n", name)
 	if len(caCerts) > 0 {
 		fmt.Printf("  CA certificates included: %d\n", len(caCerts))
 	}
-	fmt.Println("\nTo install on iOS:")
-	fmt.Println("1. Email the .p12 file to yourself")
-	fmt.Println("2. Open the attachment on your iOS device")
-	fmt.Println("3. Follow the prompts to install the certificate")
 }
 
-func collectCACertificates(leafCert *x509.Certificate) ([]*x509.Certificate, error) {
-	var caCerts []*x509.Certificate
-	currentIssuer := leafCert.Issuer.String()
-
-	// Load all certificates to find the chain
-	certsDir := filepath.Join("data", "certs")
-	files, err := os.ReadDir(certsDir)
+func loadCertificateAndKey(serial string) (*Certificate, interface{}, error) {
+	// Load certificate
+	var pemData string
+	var keyHash sql.NullString
+	err := db.QueryRow(`
+		SELECT pem_data, key_hash
+		FROM certificates
+		WHERE serial_number = ?
+	`, serial).Scan(&pemData, &keyHash)
 	if err != nil {
-		return nil, err
+		if err == sql.ErrNoRows {
+			return nil, nil, fmt.Errorf("certificate with serial %s not found", serial)
+		}
+		return nil, nil, err
 	}
 
-	// Create a map of subject -> certificate for quick lookup
-	certMap := make(map[string]*x509.Certificate)
-	for _, file := range files {
-		if !strings.HasSuffix(file.Name(), ".crt") {
+	if !keyHash.Valid {
+		return nil, nil, fmt.Errorf("no private key associated with certificate %s", serial)
+	}
+
+	cert, err := parseCertificateFromPEM(pemData)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Load private key
+	var keyData string
+	err = db.QueryRow("SELECT pem_data FROM keys WHERE public_key_hash = ?", keyHash.String).Scan(&keyData)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load private key: %v", err)
+	}
+
+	// Prompt for key password
+	fmt.Print("Enter password for private key: ")
+	keyPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read key password: %v", err)
+	}
+	fmt.Println()
+
+	privateKey, err := loadPrivateKeyFromPEM(keyData, string(keyPasswordBytes))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
+	}
+
+	return cert, privateKey, nil
+}
+
+func collectCACertificatesFromDB(cert *Certificate) ([]*x509.Certificate, error) {
+	var caCerts []*x509.Certificate
+
+	// Find parent certificates
+	currentIssuer := cert.Issuer
+	for currentIssuer != cert.Subject { // Stop when we reach a self-signed cert
+		var pemData string
+		var subject string
+		err := db.QueryRow(`
+			SELECT pem_data, subject
+			FROM certificates
+			WHERE subject = ? AND is_ca = 1
+		`, currentIssuer).Scan(&pemData, &subject)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				break // No more parents found
+			}
+			return nil, err
+		}
+
+		parentCert, err := parseCertificateFromPEM(pemData)
+		if err != nil {
 			continue
 		}
 
-		certPath := filepath.Join(certsDir, file.Name())
-		cert, err := loadCertificateFromFile(certPath)
-		if err != nil {
-			continue // Skip certificates we can't load
-		}
+		caCerts = append(caCerts, parentCert.X509Cert)
 
-		certMap[cert.Subject.String()] = cert
-	}
-
-	// Follow the chain up to the root
-	for currentIssuer != "" {
-		caCert, exists := certMap[currentIssuer]
-		if !exists {
-			break // Chain is incomplete
-		}
-
-		caCerts = append(caCerts, caCert)
-
-		// If this is a self-signed certificate (root), stop
-		if caCert.Subject.String() == caCert.Issuer.String() {
+		if parentCert.IsSelfSigned {
 			break
 		}
-
-		// Move to the next level up
-		currentIssuer = caCert.Issuer.String()
+		currentIssuer = parentCert.Issuer
 	}
 
 	return caCerts, nil
 }
 
-func generateUniqueSerial() (*big.Int, error) {
-	// Generate a random 128-bit serial number
-	max := new(big.Int)
-	max.Exp(big.NewInt(2), big.NewInt(128), nil).Sub(max, big.NewInt(1))
+// Legacy functions for create commands - simplified versions that store in DB
+func runCreateRootCommand() {
+	fs := flag.NewFlagSet("create-root", flag.ExitOnError)
 
-	for {
-		serial, err := rand.Int(rand.Reader, max)
-		if err != nil {
-			return nil, err
-		}
+	var (
+		commonName = fs.String("cn", "", "Common Name (required)")
+		keySize    = fs.Int("key-size", 4096, "RSA key size")
+		validDays  = fs.Int("valid-days", 3650, "Certificate validity in days")
+	)
 
-		// Check if files with this serial already exist
-		serialStr := fmt.Sprintf("%032x", serial)
-		keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
-		certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
-
-		// If neither file exists, we can use this serial number
-		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-			if _, err := os.Stat(certFile); os.IsNotExist(err) {
-				return serial, nil
-			}
-		}
-
-		// If files exist, try again with a new random number
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert create-root [flags]")
+		fmt.Println("")
+		fmt.Println("Generate a new root CA certificate and private key.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
 	}
-}
 
-func saveEncryptedPrivateKey(filename string, key any, password string) error {
-	keyFile, err := os.Create(filename)
+	fs.Parse(os.Args[2:])
+
+	if *commonName == "" {
+		fmt.Println("Error: common name (-cn) is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Generate key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, *keySize)
 	if err != nil {
-		return err
-	}
-	defer keyFile.Close()
-
-	var keyBytes []byte
-	var keyType string
-
-	switch k := key.(type) {
-	case *ecdsa.PrivateKey:
-		keyBytes, err = x509.MarshalECPrivateKey(k)
-		keyType = "EC PRIVATE KEY"
-	case *rsa.PrivateKey:
-		keyBytes = x509.MarshalPKCS1PrivateKey(k)
-		keyType = "RSA PRIVATE KEY"
-	default:
-		return fmt.Errorf("unsupported key type")
+		log.Fatalf("Failed to generate private key: %v", err)
 	}
 
+	// Prompt for password
+	fmt.Print("Enter password to encrypt private key: ")
+	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
 	if err != nil {
-		return err
+		log.Fatalf("Failed to read password: %v", err)
+	}
+	fmt.Println()
+	password := string(passwordBytes)
+
+	if len(password) == 0 {
+		fmt.Println("Error: password cannot be empty")
+		os.Exit(1)
 	}
 
-	// Encrypt the key with the password
-	block, err := x509.EncryptPEMBlock(rand.Reader, keyType, keyBytes, []byte(password), x509.PEMCipherAES256)
+	// Generate certificate
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: *commonName,
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, *validDays),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	// Create the certificate (self-signed)
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
 	if err != nil {
-		return err
+		log.Fatalf("Failed to create certificate: %v", err)
 	}
 
-	return pem.Encode(keyFile, block)
-}
-
-func saveCertificate(filename string, certBytes []byte) error {
-	certFile, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer certFile.Close()
-
-	return pem.Encode(certFile, &pem.Block{
+	// Convert to PEM format
+	certPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: certBytes,
 	})
+
+	// Parse certificate to get details
+	cert, err := parseCertificateFromPEM(string(certPEM))
+	if err != nil {
+		log.Fatalf("Failed to parse generated certificate: %v", err)
+	}
+
+	// Calculate key hash
+	keyHash := calculatePublicKeyHash(cert.X509Cert)
+
+	// Encrypt and store private key
+	keyPEM, err := encryptPrivateKey(privateKey, password)
+	if err != nil {
+		log.Fatalf("Failed to encrypt private key: %v", err)
+	}
+
+	// Store key in database
+	_, err = db.Exec(`
+		INSERT INTO keys (public_key_hash, pem_data)
+		VALUES (?, ?)
+	`, keyHash, keyPEM)
+	if err != nil {
+		log.Fatalf("Failed to store private key: %v", err)
+	}
+
+	// Store certificate in database
+	cert.KeyHash = keyHash
+	_, err = db.Exec(`
+		INSERT INTO certificates
+		(serial_number, subject, issuer, not_before, not_after,
+		 pem_data, key_hash, is_self_signed, is_root, is_ca)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, cert.SerialNumber, cert.Subject, cert.Issuer, cert.NotBefore, cert.NotAfter,
+		cert.PEMData, cert.KeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
+	if err != nil {
+		log.Fatalf("Failed to store certificate: %v", err)
+	}
+
+	fmt.Printf("Root CA certificate generated successfully:\n")
+	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
+	fmt.Printf("  Subject: %s\n", cert.Subject)
+	fmt.Printf("  Valid for: %d days\n", *validDays)
 }
 
-func loadCertificateFromFile(filePath string) (*x509.Certificate, error) {
-	data, err := os.ReadFile(filePath)
+func runCreateIntermediateCommand() {
+	fs := flag.NewFlagSet("create-intermediate", flag.ExitOnError)
+
+	var (
+		commonName = fs.String("cn", "", "Common Name (required)")
+		caSerial   = fs.String("ca-serial", "", "Parent CA serial number (required)")
+		keySize    = fs.Int("key-size", 4096, "RSA key size")
+		validDays  = fs.Int("valid-days", 1825, "Certificate validity in days")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert create-intermediate [flags]")
+		fmt.Println("")
+		fmt.Println("Generate an intermediate CA certificate signed by an existing CA.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	fs.Parse(os.Args[2:])
+
+	if *commonName == "" || *caSerial == "" {
+		fmt.Println("Error: common name (-cn) and ca-serial are required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Load parent CA certificate and key
+	parentCert, parentKey, err := loadCertificateAndKey(*caSerial)
 	if err != nil {
-		return nil, err
+		log.Fatalf("Failed to load parent CA: %v", err)
 	}
 
-	// Find the PEM block (skip text representation)
-	var certPEM []byte
-	for {
-		block, rest := pem.Decode(data)
-		if block == nil {
-			break
-		}
-		if block.Type == "CERTIFICATE" {
-			certPEM = block.Bytes
-			break
-		}
-		data = rest
+	if !parentCert.IsCA {
+		log.Fatalf("Parent certificate is not a CA")
 	}
 
-	if certPEM == nil {
-		return nil, fmt.Errorf("no certificate found in file")
+	// Generate new key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, *keySize)
+	if err != nil {
+		log.Fatalf("Failed to generate private key: %v", err)
 	}
 
-	return x509.ParseCertificate(certPEM)
+	// Prompt for password for new key
+	fmt.Print("Enter password to encrypt new private key: ")
+	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read password: %v", err)
+	}
+	fmt.Println()
+	password := string(passwordBytes)
+
+	if len(password) == 0 {
+		fmt.Println("Error: password cannot be empty")
+		os.Exit(1)
+	}
+
+	// Generate serial number
+	serialBytes := make([]byte, 16)
+	rand.Read(serialBytes)
+	serial := new(big.Int).SetBytes(serialBytes)
+
+	// Create certificate template
+	template := x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName: *commonName,
+		},
+		Issuer:                parentCert.X509Cert.Subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, *validDays),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	// Create the certificate
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, parentCert.X509Cert, &privateKey.PublicKey, parentKey)
+	if err != nil {
+		log.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	// Convert to PEM format
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+
+	// Parse certificate to get details
+	cert, err := parseCertificateFromPEM(string(certPEM))
+	if err != nil {
+		log.Fatalf("Failed to parse generated certificate: %v", err)
+	}
+
+	// Calculate key hash and store
+	keyHash := calculatePublicKeyHash(cert.X509Cert)
+	keyPEM, err := encryptPrivateKey(privateKey, password)
+	if err != nil {
+		log.Fatalf("Failed to encrypt private key: %v", err)
+	}
+
+	// Store key in database
+	_, err = db.Exec(`
+		INSERT INTO keys (public_key_hash, pem_data)
+		VALUES (?, ?)
+	`, keyHash, keyPEM)
+	if err != nil {
+		log.Fatalf("Failed to store private key: %v", err)
+	}
+
+	// Store certificate in database
+	cert.KeyHash = keyHash
+	_, err = db.Exec(`
+		INSERT INTO certificates
+		(serial_number, subject, issuer, not_before, not_after,
+		 pem_data, key_hash, is_self_signed, is_root, is_ca)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, cert.SerialNumber, cert.Subject, cert.Issuer, cert.NotBefore, cert.NotAfter,
+		cert.PEMData, cert.KeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
+	if err != nil {
+		log.Fatalf("Failed to store certificate: %v", err)
+	}
+
+	fmt.Printf("Intermediate CA certificate generated successfully:\n")
+	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
+	fmt.Printf("  Subject: %s\n", cert.Subject)
+	fmt.Printf("  Parent: %s\n", parentCert.SerialNumber)
+	fmt.Printf("  Valid for: %d days\n", *validDays)
 }
 
-func loadEncryptedPrivateKey(filePath string, password string) (any, error) {
-	data, err := os.ReadFile(filePath)
+func runCreateLeafCommand() {
+	fs := flag.NewFlagSet("create-leaf", flag.ExitOnError)
+
+	var (
+		commonName = fs.String("cn", "", "Common Name (required)")
+		caSerial   = fs.String("ca-serial", "", "Parent CA serial number (required)")
+		keySize    = fs.Int("key-size", 4096, "RSA key size")
+		validDays  = fs.Int("valid-days", 365, "Certificate validity in days")
+		sanDNS     = fs.String("san-dns", "", "DNS names for SAN (comma-separated)")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert create-leaf [flags]")
+		fmt.Println("")
+		fmt.Println("Generate an end-entity certificate signed by an existing CA.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	fs.Parse(os.Args[2:])
+
+	if *commonName == "" || *caSerial == "" {
+		fmt.Println("Error: common name (-cn) and ca-serial are required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Load parent CA certificate and key
+	parentCert, parentKey, err := loadCertificateAndKey(*caSerial)
 	if err != nil {
-		return nil, err
+		log.Fatalf("Failed to load parent CA: %v", err)
 	}
 
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, fmt.Errorf("no PEM block found")
+	if !parentCert.IsCA {
+		log.Fatalf("Parent certificate is not a CA")
 	}
 
-	var keyBytes []byte
-	if x509.IsEncryptedPEMBlock(block) {
-		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt private key: %v", err)
+	// Generate new key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, *keySize)
+	if err != nil {
+		log.Fatalf("Failed to generate private key: %v", err)
+	}
+
+	// Prompt for password for new key
+	fmt.Print("Enter password to encrypt new private key: ")
+	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read password: %v", err)
+	}
+	fmt.Println()
+	password := string(passwordBytes)
+
+	if len(password) == 0 {
+		fmt.Println("Error: password cannot be empty")
+		os.Exit(1)
+	}
+
+	// Generate serial number
+	serialBytes := make([]byte, 16)
+	rand.Read(serialBytes)
+	serial := new(big.Int).SetBytes(serialBytes)
+
+	// Create certificate template
+	template := x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName: *commonName,
+		},
+		Issuer:                parentCert.X509Cert.Subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, *validDays),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	// Add SAN DNS names if provided
+	if *sanDNS != "" {
+		dnsNames := strings.Split(*sanDNS, ",")
+		for i, name := range dnsNames {
+			dnsNames[i] = strings.TrimSpace(name)
 		}
-	} else {
-		keyBytes = block.Bytes
+		template.DNSNames = dnsNames
 	}
 
-	// Try to parse as different key types
-	switch block.Type {
-	case "EC PRIVATE KEY":
-		return x509.ParseECPrivateKey(keyBytes)
-	case "RSA PRIVATE KEY":
-		return x509.ParsePKCS1PrivateKey(keyBytes)
-	case "PRIVATE KEY":
-		return x509.ParsePKCS8PrivateKey(keyBytes)
-	default:
-		return nil, fmt.Errorf("unsupported key type: %s", block.Type)
+	// Create the certificate
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, parentCert.X509Cert, &privateKey.PublicKey, parentKey)
+	if err != nil {
+		log.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	// Convert to PEM format
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+
+	// Parse certificate to get details
+	cert, err := parseCertificateFromPEM(string(certPEM))
+	if err != nil {
+		log.Fatalf("Failed to parse generated certificate: %v", err)
+	}
+
+	// Calculate key hash and store
+	keyHash := calculatePublicKeyHash(cert.X509Cert)
+	keyPEM, err := encryptPrivateKey(privateKey, password)
+	if err != nil {
+		log.Fatalf("Failed to encrypt private key: %v", err)
+	}
+
+	// Store key in database
+	_, err = db.Exec(`
+		INSERT INTO keys (public_key_hash, pem_data)
+		VALUES (?, ?)
+	`, keyHash, keyPEM)
+	if err != nil {
+		log.Fatalf("Failed to store private key: %v", err)
+	}
+
+	// Store certificate in database
+	cert.KeyHash = keyHash
+	_, err = db.Exec(`
+		INSERT INTO certificates
+		(serial_number, subject, issuer, not_before, not_after,
+		 pem_data, key_hash, is_self_signed, is_root, is_ca)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, cert.SerialNumber, cert.Subject, cert.Issuer, cert.NotBefore, cert.NotAfter,
+		cert.PEMData, cert.KeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
+	if err != nil {
+		log.Fatalf("Failed to store certificate: %v", err)
+	}
+
+	fmt.Printf("End-entity certificate generated successfully:\n")
+	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
+	fmt.Printf("  Subject: %s\n", cert.Subject)
+	fmt.Printf("  Parent: %s\n", parentCert.SerialNumber)
+	fmt.Printf("  Valid for: %d days\n", *validDays)
+	if len(template.DNSNames) > 0 {
+		fmt.Printf("  DNS SANs: %s\n", strings.Join(template.DNSNames, ", "))
 	}
 }
