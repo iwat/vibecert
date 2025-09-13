@@ -64,6 +64,9 @@ vibecert export-pkcs12 --serial <serial_number> [--output filename.p12] [--name 
 ```bash
 # Change private key password
 vibecert reencrypt-key --serial <serial_number>
+
+# Delete certificate and its private key
+vibecert delete --serial <serial_number> [--force]
 ```
 
 ### Certificate Creation
@@ -143,6 +146,7 @@ vibecert --help  # Shows default database path
 - The SQLite database should be backed up regularly and stored securely
 - The default database directory is created with restrictive permissions (700)
 - Consider additional file system encryption for sensitive certificate environments
+- Delete operations are atomic and check for certificate dependencies before deletion
 
 ## Examples
 
@@ -179,6 +183,9 @@ vibecert --db /path/to/project.db import --cert server.pem --key server.key
 
 # View the imported tree
 vibecert tree
+
+# Clean up - delete certificates when no longer needed
+vibecert delete --serial <serial_number>
 ```
 
 ## Building from Source
@@ -203,6 +210,21 @@ This script tests:
 - Environment variable `VIBECERT_DB` support
 - Database path priority and override behavior
 - Cross-database operations and isolation
+
+### Delete Command Usage
+```bash
+# Delete a certificate (with confirmation prompt)
+vibecert delete --serial <serial_number>
+
+# Delete without confirmation prompt
+vibecert delete --serial <serial_number> --force
+
+# The delete command will:
+# - Show what will be deleted (certificate and key status)
+# - Warn if the certificate has child certificates
+# - Delete the certificate and its private key (if not used by other certificates)
+# - Preserve private keys that are shared by multiple certificates
+```
 
 ## Dependencies
 

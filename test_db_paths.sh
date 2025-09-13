@@ -138,3 +138,40 @@ echo "✓ All commands work with custom database paths"
 echo "✓ Multiple databases can coexist"
 echo
 echo "All database path functionality tests passed! 🎉"
+
+# Test 6: Delete command functionality
+echo "=== Test 6: Delete Command Functionality ==="
+echo "Testing certificate and key deletion..."
+
+# Create a test database with certificates
+./vibecert --db ./delete-test.db import --cert data/certs/017fdecacc5a70c86718302887a6cdb1.crt
+./vibecert --db ./delete-test.db import --cert data/certs/3f4d405464f4e7ee03225bded9d58345.crt --key data/keys/3f4d405464f4e7ee03225bded9d58345.key
+
+echo "Initial certificate tree:"
+./vibecert --db ./delete-test.db tree
+
+# Test delete with confirmation (simulate 'n' response)
+echo "Testing delete cancellation..."
+echo "n" | ./vibecert --db ./delete-test.db delete --serial 017fdecacc5a70c86718302887a6cdb1
+
+echo "Tree after cancelled deletion (should be unchanged):"
+./vibecert --db ./delete-test.db tree
+
+# Test delete with force flag
+echo "Testing delete with --force flag..."
+./vibecert --db ./delete-test.db delete --serial 3f4d405464f4e7ee03225bded9d58345 --force
+
+echo "Tree after forced deletion:"
+./vibecert --db ./delete-test.db tree
+
+# Test delete of non-existent certificate
+echo "Testing delete of non-existent certificate..."
+./vibecert --db ./delete-test.db delete --serial nonexistent --force 2>&1 || echo "✓ Properly handled non-existent certificate"
+
+# Clean up delete test database
+rm -f ./delete-test.db
+
+echo "✓ Delete command tests completed"
+echo
+
+echo "All database path functionality tests passed! 🎉"

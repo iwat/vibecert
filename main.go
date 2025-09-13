@@ -116,6 +116,8 @@ func main() {
 		runExportKeyCommand()
 	case "reencrypt-key":
 		runReencryptKeyCommand()
+	case "delete":
+		runDeleteCommand()
 	case "export-pkcs12":
 		runExportPKCS12Command()
 	case "help", "-h", "--help":
@@ -135,14 +137,20 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("Available commands:")
 	fmt.Println("  tree             Display certificate dependency tree")
+	fmt.Println("")
+	fmt.Println("Certificate Creation:")
 	fmt.Println("  create-root      Generate a new root certificate and key")
 	fmt.Println("  create-intermediate Generate an intermediate CA certificate")
 	fmt.Println("  create-leaf      Generate an end-entity certificate")
+	fmt.Println("")
+	fmt.Println("Certificate Management:")
 	fmt.Println("  import           Import certificate and optional key")
 	fmt.Println("  export-cert      Export certificate with human-readable content")
 	fmt.Println("  export-key       Export encrypted private key")
-	fmt.Println("  reencrypt-key    Change private key password")
 	fmt.Println("  export-pkcs12    Export certificate and key as PKCS#12 file")
+	fmt.Println("  reencrypt-key    Change private key password")
+	fmt.Println("  delete           Delete certificate and its private key")
+	fmt.Println("")
 	fmt.Println("  help             Show this help message")
 	fmt.Println("")
 	fmt.Println("Database location:")
@@ -698,6 +706,162 @@ func runReencryptKeyCommand() {
 	}
 
 	fmt.Printf("Private key password changed successfully for certificate %s\n", *serial)
+}
+
+func runDeleteCommand() {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+
+	var (
+		serial = fs.String("serial", "", "Certificate serial number to delete (required)")
+		force  = fs.Bool("force", false, "Skip confirmation prompt")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert delete [flags]")
+		fmt.Println("")
+		fmt.Println("Delete a certificate and its associated private key from the database.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	fs.Parse(os.Args[2:])
+
+	if *serial == "" {
+		fmt.Println("Error: serial number is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Load certificate to get details and key hash
+	var subject, keyHash string
+	var keyHashPtr sql.NullString
+	err := db.QueryRow(`
+		SELECT subject, key_hash
+		FROM certificates
+		WHERE serial_number = ?
+	`, *serial).Scan(&subject, &keyHashPtr)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Fatalf("Certificate with serial %s not found", *serial)
+		}
+		log.Fatalf("Failed to load certificate: %v", err)
+	}
+
+	if keyHashPtr.Valid {
+		keyHash = keyHashPtr.String
+	}
+
+	// Show what will be deleted
+	fmt.Printf("Certificate to delete:\n")
+	fmt.Printf("  Serial: %s\n", *serial)
+	fmt.Printf("  Subject: %s\n", subject)
+	if keyHash != "" {
+		fmt.Printf("  Private key: Yes (will also be deleted)\n")
+	} else {
+		fmt.Printf("  Private key: No\n")
+	}
+	fmt.Println()
+
+	// Confirmation prompt unless --force is used
+	if !*force {
+		fmt.Print("Are you sure you want to delete this certificate? (y/N): ")
+		var response string
+		fmt.Scanln(&response)
+		if response != "y" && response != "Y" && response != "yes" && response != "Yes" {
+			fmt.Println("Delete cancelled.")
+			os.Exit(0)
+		}
+	}
+
+	// Check if certificate has children (is a parent to other certificates)
+	var childCount int
+	err = db.QueryRow(`
+		SELECT COUNT(*)
+		FROM certificates
+		WHERE issuer = ?
+	`, subject).Scan(&childCount)
+	if err != nil {
+		log.Fatalf("Failed to check for child certificates: %v", err)
+	}
+
+	if childCount > 0 {
+		fmt.Printf("Warning: This certificate is a parent to %d other certificate(s).\n", childCount)
+		fmt.Println("Deleting it may leave orphaned certificates in the database.")
+
+		if !*force {
+			fmt.Print("Continue with deletion anyway? (y/N): ")
+			var response string
+			fmt.Scanln(&response)
+			if response != "y" && response != "Y" && response != "yes" && response != "Yes" {
+				fmt.Println("Delete cancelled.")
+				os.Exit(0)
+			}
+		}
+	}
+
+	// Begin transaction for atomic deletion
+	tx, err := db.Begin()
+	if err != nil {
+		log.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Delete the certificate
+	result, err := tx.Exec("DELETE FROM certificates WHERE serial_number = ?", *serial)
+	if err != nil {
+		log.Fatalf("Failed to delete certificate: %v", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Fatalf("Failed to get rows affected: %v", err)
+	}
+
+	if rowsAffected == 0 {
+		log.Fatalf("No certificate was deleted (serial not found)")
+	}
+
+	// Delete the associated private key if it exists and no other certificates use it
+	if keyHash != "" {
+		var keyUsageCount int
+		err = tx.QueryRow(`
+			SELECT COUNT(*)
+			FROM certificates
+			WHERE key_hash = ?
+		`, keyHash).Scan(&keyUsageCount)
+		if err != nil {
+			log.Fatalf("Failed to check key usage: %v", err)
+		}
+
+		if keyUsageCount == 0 {
+			// No other certificates use this key, safe to delete
+			keyResult, err := tx.Exec("DELETE FROM keys WHERE public_key_hash = ?", keyHash)
+			if err != nil {
+				log.Fatalf("Failed to delete private key: %v", err)
+			}
+
+			keyRowsAffected, err := keyResult.RowsAffected()
+			if err != nil {
+				log.Fatalf("Failed to get key deletion rows affected: %v", err)
+			}
+
+			if keyRowsAffected > 0 {
+				fmt.Printf("✓ Associated private key deleted\n")
+			}
+		} else {
+			fmt.Printf("✓ Private key preserved (used by %d other certificate(s))\n", keyUsageCount)
+		}
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		log.Fatalf("Failed to commit transaction: %v", err)
+	}
+
+	fmt.Printf("✓ Certificate deleted successfully\n")
+	fmt.Printf("  Serial: %s\n", *serial)
+	fmt.Printf("  Subject: %s\n", subject)
 }
 
 func loadPrivateKeyFromPEM(pemData, password string) (interface{}, error) {

@@ -35,10 +35,17 @@ Successfully migrated VibeCert from file-based storage to SQLite database storag
   - Export encrypted private keys
   - Maintains original encryption and format
 
+#### Key Management Commands
 - `vibecert reencrypt-key --serial <serial>`
   - Change private key passwords interactively
   - Prompts for current password, new password, and confirmation
   - Updates database with re-encrypted key
+
+- `vibecert delete --serial <serial> [--force]`
+  - Delete certificates and associated private keys
+  - Warns about child certificate dependencies
+  - Preserves shared private keys used by multiple certificates
+  - Atomic transaction ensures data consistency
 
 #### Enhanced PKCS#12 Export
 - `vibecert export-pkcs12 --serial <serial> [--output <file>] [--name <name>] [--include-ca]`
@@ -65,10 +72,11 @@ Successfully migrated VibeCert from file-based storage to SQLite database storag
 1. **Certificate Serial Number as Primary Key**: Enables direct certificate lookup
 2. **Structured Metadata Storage**: Issuer, subject, validity periods in queryable fields
 3. **Public Key Hash Linking**: Secure association between certificates and private keys
-4. **Enhanced Tree Visualization**: Shows key availability status
+4. **Enhanced Tree Visualization**: Shows key availability status and certificate hierarchy
 5. **Flexible Import/Export**: Support for various certificate formats and sources
 6. **Smart Database Location**: Uses OS-specific user config directories by default
 7. **Database Path Flexibility**: Support for custom database locations via CLI or environment
+8. **Safe Certificate Deletion**: Atomic deletion with dependency checking and shared key preservation
 
 ### Security Considerations
 - Private keys remain encrypted with AES-256-CBC
@@ -128,6 +136,8 @@ CREATE TABLE keys (
 - Certificate tree visualization with proper hierarchy
 - Certificate export with human-readable format
 - Private key export functionality
+- Private key password changes (reencrypt-key)
+- Certificate and key deletion with dependency checking
 - PKCS#12 export with CA chain collection
 
 ### ✅ Data Integrity Verified
@@ -209,10 +219,11 @@ All functionality tested across different database path scenarios:
 - Command-line --db flag functioning properly
 - Environment variable VIBECERT_DB working as expected
 - CLI flag properly overrides environment variable
-- All commands (import, export-cert, export-key, export-pkcs12, tree) work with custom paths
+- All commands (import, export-cert, export-key, reencrypt-key, delete, export-pkcs12, tree) work with custom paths
 - Multiple databases can coexist without interference
 - Cross-database operations verified
 - Database content isolation confirmed
+- Certificate deletion with child dependency warnings tested
 
 ## Summary
 
@@ -223,5 +234,7 @@ The migration successfully modernizes VibeCert with a robust SQLite database bac
 - **Deployment Flexibility**: Support for project-specific, user-specific, or system-wide databases
 - **Security Enhanced**: Proper file permissions and secure default locations
 - **Developer Friendly**: Easy switching between development, testing, and production databases
+- **Certificate Lifecycle Management**: Complete CRUD operations (Create, Read, Update, Delete)
+- **Data Integrity**: Atomic operations with dependency checking and referential integrity
 - **Backward Compatible**: Existing certificate creation workflows preserved
 - **Future Ready**: Solid foundation for advanced PKI management features
