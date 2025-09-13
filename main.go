@@ -34,6 +34,7 @@ type Certificate struct {
 	Children     []*Certificate
 	IsSelfSigned bool
 	IsRoot       bool
+	IsCA         bool
 }
 
 func main() {
@@ -146,31 +147,20 @@ func loadCertificate(filePath string) (*Certificate, error) {
 		return nil, err
 	}
 
-	// Extract last 4 bytes of serial number as hex
-	serialBytes := x509Cert.SerialNumber.Bytes()
-	var lastFourBytes string
-	if len(serialBytes) >= 4 {
-		lastFourBytes = fmt.Sprintf("%02x%02x%02x%02x",
-			serialBytes[len(serialBytes)-4],
-			serialBytes[len(serialBytes)-3],
-			serialBytes[len(serialBytes)-2],
-			serialBytes[len(serialBytes)-1])
-	} else {
-		// If serial number is less than 4 bytes, use all of it
-		lastFourBytes = fmt.Sprintf("%x", x509Cert.SerialNumber)
-	}
+	serialNum := fmt.Sprintf("%x", x509Cert.SerialNumber)
 
 	isSelfSigned := x509Cert.Subject.String() == x509Cert.Issuer.String()
 
 	cert := &Certificate{
 		Subject:      x509Cert.Subject.String(),
 		Issuer:       x509Cert.Issuer.String(),
-		SerialNum:    lastFourBytes,
+		SerialNum:    serialNum,
 		FilePath:     filePath,
 		X509Cert:     x509Cert,
 		Children:     make([]*Certificate, 0),
 		IsSelfSigned: isSelfSigned,
 		IsRoot:       false,
+		IsCA:         x509Cert.IsCA,
 	}
 
 	return cert, nil
@@ -221,17 +211,27 @@ func sortCertificates(certs []*Certificate) {
 func printCertificateTree(certs []*Certificate, level int) {
 	for _, cert := range certs {
 		indent := strings.Repeat("  ", level)
-		indicator := ""
+		indicator := strings.Builder{}
+		hasIndicator := false
 
 		if cert.IsRoot {
 			if cert.IsSelfSigned {
-				indicator = " [SELF-SIGNED]"
-			} else {
-				indicator = " [EXTERNALLY SIGNED]"
+				if !hasIndicator {
+					indicator.WriteString(" ")
+					hasIndicator = true
+				}
+				indicator.WriteString("[SELF-SIGNED]")
 			}
 		}
+		if cert.IsCA {
+			if !hasIndicator {
+				indicator.WriteString(" ")
+				hasIndicator = true
+			}
+			indicator.WriteString("[CA]")
+		}
 
-		fmt.Printf("%s%s (...%s)%s\n", indent, cert.Subject, cert.SerialNum, indicator)
+		fmt.Printf("%s%s (%s)%s\n", indent, cert.Subject, cert.SerialNum, indicator.String())
 
 		if len(cert.Children) > 0 {
 			printCertificateTree(cert.Children, level+1)
