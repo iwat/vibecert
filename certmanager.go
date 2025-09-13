@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"crypto/dsa"
+
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/term"
 )
@@ -144,16 +146,28 @@ func (cm *CertificateManager) InitializeDatabase() error {
 
 // ImportCertificate imports a certificate and optionally its private key
 func (cm *CertificateManager) ImportCertificate(certPEM string, keyPEM string) (*Certificate, error) {
+	return cm.importCertificateWithValidation(certPEM, keyPEM, true)
+}
+
+// importCertificateWithValidation imports a certificate with optional key validation
+func (cm *CertificateManager) importCertificateWithValidation(certPEM string, keyPEM string, validateKey bool) (*Certificate, error) {
 	cert, err := cm.parseCertificateFromPEM(certPEM)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
 
-	// Calculate key hash
+	// Calculate key hash from certificate's public key
 	keyHash := cm.calculatePublicKeyHash(cert.X509Cert)
 
 	// Import key if provided
 	if keyPEM != "" {
+		// Validate that the private key matches the certificate (unless validation is skipped)
+		if validateKey {
+			if err := cm.validateKeyMatchesCertificate(keyPEM, cert.X509Cert); err != nil {
+				return nil, fmt.Errorf("private key does not match certificate: %v", err)
+			}
+		}
+
 		_, err = cm.db.Exec(`
 			INSERT OR REPLACE INTO keys (public_key_hash, pem_data)
 			VALUES (?, ?)
@@ -488,6 +502,42 @@ type CreateRootCARequest struct {
 	Password   string
 }
 
+// ImportKey imports a private key for an existing certificate
+func (cm *CertificateManager) ImportKey(serialNumber string, keyPEM string) error {
+	// Get the certificate first
+	cert, err := cm.GetCertificate(serialNumber)
+	if err != nil {
+		return fmt.Errorf("certificate not found: %v", err)
+	}
+
+	// Validate that the private key matches the certificate
+	if err := cm.validateKeyMatchesCertificate(keyPEM, cert.X509Cert); err != nil {
+		return fmt.Errorf("private key does not match certificate: %v", err)
+	}
+
+	// Calculate key hash from certificate's public key
+	keyHash := cm.calculatePublicKeyHash(cert.X509Cert)
+
+	// Store the key
+	_, err = cm.db.Exec(`
+		INSERT OR REPLACE INTO keys (public_key_hash, pem_data)
+		VALUES (?, ?)
+	`, keyHash, keyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to store key: %v", err)
+	}
+
+	// Update the certificate to link to the key
+	_, err = cm.db.Exec(`
+		UPDATE certificates SET key_hash = ? WHERE serial_number = ?
+	`, keyHash, serialNumber)
+	if err != nil {
+		return fmt.Errorf("failed to update certificate: %v", err)
+	}
+
+	return nil
+}
+
 func (cm *CertificateManager) CreateRootCA(req *CreateRootCARequest) (*Certificate, error) {
 	// Generate key pair
 	privateKey, err := rsa.GenerateKey(rand.Reader, req.KeySize)
@@ -526,8 +576,8 @@ func (cm *CertificateManager) CreateRootCA(req *CreateRootCARequest) (*Certifica
 		return nil, fmt.Errorf("failed to encrypt private key: %v", err)
 	}
 
-	// Import the certificate
-	return cm.ImportCertificate(string(certPEM), keyPEM)
+	// Import the certificate without validation (we know the key matches since we just created it)
+	return cm.importCertificateWithValidation(string(certPEM), keyPEM, false)
 }
 
 // Helper methods
@@ -630,6 +680,128 @@ func (cm *CertificateManager) loadPrivateKeyFromPEM(pemData, password string) (a
 	}
 
 	return nil, fmt.Errorf("failed to parse private key")
+}
+
+// validateKeyMatchesCertificate checks if a private key matches the certificate's public key
+func (cm *CertificateManager) validateKeyMatchesCertificate(keyPEM string, cert *x509.Certificate) error {
+	// Parse the private key
+	privateKey, err := cm.loadPrivateKeyFromPEM(keyPEM, "")
+	if err != nil {
+		// If decryption failed, it might be encrypted, try with empty password first
+		// For validation, we need to handle encrypted keys properly
+		block, _ := pem.Decode([]byte(keyPEM))
+		if block == nil {
+			return fmt.Errorf("failed to decode PEM block")
+		}
+
+		if x509.IsEncryptedPEMBlock(block) {
+			return fmt.Errorf("cannot validate encrypted private key without password")
+		}
+		return fmt.Errorf("failed to parse private key: %v", err)
+	}
+
+	// Get public key from private key
+	var publicKey any
+	switch priv := privateKey.(type) {
+	case *rsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *ecdsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *dsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	default:
+		return fmt.Errorf("unsupported private key type: %T", privateKey)
+	}
+
+	// Compare with certificate's public key
+	certPublicKey := cert.PublicKey
+
+	// Type check first
+	if fmt.Sprintf("%T", publicKey) != fmt.Sprintf("%T", certPublicKey) {
+		return fmt.Errorf("key type mismatch: private key is %T, certificate public key is %T", publicKey, certPublicKey)
+	}
+
+	// Detailed comparison based on key type
+	switch pub := publicKey.(type) {
+	case *rsa.PublicKey:
+		certPub := certPublicKey.(*rsa.PublicKey)
+		if pub.N.Cmp(certPub.N) != 0 || pub.E != certPub.E {
+			return fmt.Errorf("RSA key mismatch")
+		}
+	case *ecdsa.PublicKey:
+		certPub := certPublicKey.(*ecdsa.PublicKey)
+		if pub.X.Cmp(certPub.X) != 0 || pub.Y.Cmp(certPub.Y) != 0 || !pub.Curve.IsOnCurve(pub.X, pub.Y) {
+			return fmt.Errorf("ECDSA key mismatch")
+		}
+		if pub.Curve.Params().Name != certPub.Curve.Params().Name {
+			return fmt.Errorf("ECDSA curve mismatch")
+		}
+	case *dsa.PublicKey:
+		certPub := certPublicKey.(*dsa.PublicKey)
+		if pub.Y.Cmp(certPub.Y) != 0 || pub.P.Cmp(certPub.P) != 0 || pub.Q.Cmp(certPub.Q) != 0 || pub.G.Cmp(certPub.G) != 0 {
+			return fmt.Errorf("DSA key mismatch")
+		}
+	default:
+		return fmt.Errorf("unsupported public key type for validation: %T", publicKey)
+	}
+
+	return nil
+}
+
+// ValidateKeyMatchesCertificateWithPassword checks if an encrypted private key matches the certificate's public key
+func (cm *CertificateManager) ValidateKeyMatchesCertificateWithPassword(keyPEM, password string, cert *x509.Certificate) error {
+	// Parse the private key with password
+	privateKey, err := cm.loadPrivateKeyFromPEM(keyPEM, password)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt and parse private key: %v", err)
+	}
+
+	// Get public key from private key
+	var publicKey any
+	switch priv := privateKey.(type) {
+	case *rsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *ecdsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *dsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	default:
+		return fmt.Errorf("unsupported private key type: %T", privateKey)
+	}
+
+	// Compare with certificate's public key
+	certPublicKey := cert.PublicKey
+
+	// Type check first
+	if fmt.Sprintf("%T", publicKey) != fmt.Sprintf("%T", certPublicKey) {
+		return fmt.Errorf("key type mismatch: private key is %T, certificate public key is %T", publicKey, certPublicKey)
+	}
+
+	// Detailed comparison based on key type
+	switch pub := publicKey.(type) {
+	case *rsa.PublicKey:
+		certPub := certPublicKey.(*rsa.PublicKey)
+		if pub.N.Cmp(certPub.N) != 0 || pub.E != certPub.E {
+			return fmt.Errorf("RSA key mismatch")
+		}
+	case *ecdsa.PublicKey:
+		certPub := certPublicKey.(*ecdsa.PublicKey)
+		if pub.X.Cmp(certPub.X) != 0 || pub.Y.Cmp(certPub.Y) != 0 || !pub.Curve.IsOnCurve(pub.X, pub.Y) {
+			return fmt.Errorf("ECDSA key mismatch")
+		}
+		if pub.Curve.Params().Name != certPub.Curve.Params().Name {
+			return fmt.Errorf("ECDSA curve mismatch")
+		}
+	case *dsa.PublicKey:
+		certPub := certPublicKey.(*dsa.PublicKey)
+		if pub.Y.Cmp(certPub.Y) != 0 || pub.P.Cmp(certPub.P) != 0 || pub.Q.Cmp(certPub.Q) != 0 || pub.G.Cmp(certPub.G) != 0 {
+			return fmt.Errorf("DSA key mismatch")
+		}
+	default:
+		return fmt.Errorf("unsupported public key type for validation: %T", publicKey)
+	}
+
+	return nil
 }
 
 func (cm *CertificateManager) encryptPrivateKey(privateKey any, password string) (string, error) {

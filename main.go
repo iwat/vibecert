@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
@@ -107,6 +108,8 @@ func main() {
 		cli.runCreateLeafCommand()
 	case "import":
 		cli.runImportCommand()
+	case "import-key":
+		cli.runImportKeyCommand()
 	case "export-cert":
 		cli.runExportCertCommand()
 	case "export-key":
@@ -167,6 +170,7 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("Certificate Management:")
 	fmt.Println("  import           Import certificate and optional key")
+	fmt.Println("  import-key       Import private key for existing certificate")
 	fmt.Println("  export-cert      Export certificate with human-readable content")
 	fmt.Println("  export-key       Export encrypted private key")
 	fmt.Println("  export-pkcs12    Export certificate and key as PKCS#12 file")
@@ -299,6 +303,74 @@ func (cli *CLI) runImportCommand() {
 	} else {
 		fmt.Printf("  Private key: not provided\n")
 	}
+}
+
+func (cli *CLI) runImportKeyCommand() {
+	fs := flag.NewFlagSet("import-key", flag.ExitOnError)
+
+	var (
+		serial  = fs.String("serial", "", "Certificate serial number (required)")
+		keyFile = fs.String("key", "", "Private key file path (required)")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert import-key [flags]")
+		fmt.Println("")
+		fmt.Println("Import a private key for an existing certificate.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	fs.Parse(os.Args[2:])
+
+	if *serial == "" {
+		fmt.Println("Error: serial number is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	if *keyFile == "" {
+		fmt.Println("Error: key file is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Load private key
+	keyBytes, err := os.ReadFile(*keyFile)
+	if err != nil {
+		log.Fatalf("Failed to read key file: %v", err)
+	}
+
+	// Check if the key is encrypted and get password if needed
+	keyData := string(keyBytes)
+	block, _ := pem.Decode(keyBytes)
+	if block != nil && x509.IsEncryptedPEMBlock(block) {
+		fmt.Print("Private key is encrypted. Enter password: ")
+		passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			log.Fatalf("Failed to read password: %v", err)
+		}
+		fmt.Println()
+
+		// Validate the key with password before importing
+		cert, err := cli.cm.GetCertificate(*serial)
+		if err != nil {
+			log.Fatalf("Failed to get certificate: %v", err)
+		}
+
+		err = cli.cm.ValidateKeyMatchesCertificateWithPassword(keyData, string(passwordBytes), cert.X509Cert)
+		if err != nil {
+			log.Fatalf("Key validation failed: %v", err)
+		}
+	}
+
+	err = cli.cm.ImportKey(*serial, keyData)
+	if err != nil {
+		log.Fatalf("Failed to import key: %v", err)
+	}
+
+	fmt.Printf("Private key imported successfully for certificate with serial: %s\n", *serial)
 }
 
 func (cli *CLI) runExportCertCommand() {

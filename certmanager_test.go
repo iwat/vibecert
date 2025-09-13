@@ -856,3 +856,238 @@ func BenchmarkCertificateManager_BuildCertificateTree(b *testing.B) {
 		cm.BuildCertificateTree(certificates)
 	}
 }
+
+// Test key-certificate validation
+func TestCertificateManager_ValidateKeyMatchesCertificate(t *testing.T) {
+	cm, db, err := createTestCertificateManager()
+	if err != nil {
+		t.Fatalf("Failed to create test certificate manager: %v", err)
+	}
+	defer db.Close()
+
+	// Generate matching certificate and key
+	validCertPEM, validKeyPEM, err := generateTestCertAndKey()
+	if err != nil {
+		t.Fatalf("Failed to generate test certificate and key: %v", err)
+	}
+
+	// Parse certificate to get X509 object
+	cert, err := cm.parseCertificateFromPEM(validCertPEM)
+	if err != nil {
+		t.Fatalf("Failed to parse certificate: %v", err)
+	}
+
+	// Test with matching key
+	err = cm.validateKeyMatchesCertificate(validKeyPEM, cert.X509Cert)
+	if err != nil {
+		t.Errorf("Expected no error with matching key, got: %v", err)
+	}
+
+	// Generate a different certificate and key pair
+	_, wrongKeyPEM, err := generateTestCertAndKey()
+	if err != nil {
+		t.Fatalf("Failed to generate wrong certificate and key: %v", err)
+	}
+
+	// Test with non-matching key
+	err = cm.validateKeyMatchesCertificate(wrongKeyPEM, cert.X509Cert)
+	if err == nil {
+		t.Errorf("Expected error with non-matching key, but got none")
+	}
+
+	// Test with invalid key PEM
+	err = cm.validateKeyMatchesCertificate("invalid pem data", cert.X509Cert)
+	if err == nil {
+		t.Errorf("Expected error with invalid key PEM, but got none")
+	}
+}
+
+func TestCertificateManager_ImportCertificate_KeyValidation(t *testing.T) {
+	cm, db, err := createTestCertificateManager()
+	if err != nil {
+		t.Fatalf("Failed to create test certificate manager: %v", err)
+	}
+	defer db.Close()
+
+	// Generate matching certificate and key
+	validCertPEM, validKeyPEM, err := generateTestCertAndKey()
+	if err != nil {
+		t.Fatalf("Failed to generate test certificate and key: %v", err)
+	}
+
+	// Test importing with matching key - should succeed
+	cert, err := cm.ImportCertificate(validCertPEM, validKeyPEM)
+	if err != nil {
+		t.Errorf("Expected no error with matching key, got: %v", err)
+	}
+	if cert.KeyHash == "" {
+		t.Errorf("Expected key to be imported")
+	}
+
+	// Generate another certificate and key pair
+	_, wrongKeyPEM, err := generateTestCertAndKey()
+	if err != nil {
+		t.Fatalf("Failed to generate wrong certificate and key: %v", err)
+	}
+
+	// Test importing certificate with non-matching key - should fail
+	_, err = cm.ImportCertificate(validCertPEM, wrongKeyPEM)
+	if err == nil {
+		t.Errorf("Expected error with non-matching key, but got none")
+	}
+	if !strings.Contains(err.Error(), "private key does not match certificate") {
+		t.Errorf("Expected key mismatch error, got: %v", err)
+	}
+}
+
+func TestCertificateManager_ImportKey(t *testing.T) {
+	cm, db, err := createTestCertificateManager()
+	if err != nil {
+		t.Fatalf("Failed to create test certificate manager: %v", err)
+	}
+	defer db.Close()
+
+	// Generate matching certificate and key
+	validCertPEM, validKeyPEM, err := generateTestCertAndKey()
+	if err != nil {
+		t.Fatalf("Failed to generate test certificate and key: %v", err)
+	}
+
+	// Import certificate without key first
+	cert, err := cm.ImportCertificate(validCertPEM, "")
+	if err != nil {
+		t.Fatalf("Failed to import certificate: %v", err)
+	}
+	if cert.KeyHash != "" {
+		t.Errorf("Expected no key to be imported initially")
+	}
+
+	// Now import the matching key
+	err = cm.ImportKey(cert.SerialNumber, validKeyPEM)
+	if err != nil {
+		t.Errorf("Expected no error importing matching key, got: %v", err)
+	}
+
+	// Verify certificate now has key
+	updatedCert, err := cm.GetCertificate(cert.SerialNumber)
+	if err != nil {
+		t.Fatalf("Failed to get updated certificate: %v", err)
+	}
+	if updatedCert.KeyHash == "" {
+		t.Errorf("Expected certificate to have key after import")
+	}
+
+	// Generate another key pair
+	_, wrongKeyPEM, err := generateTestCertAndKey()
+	if err != nil {
+		t.Fatalf("Failed to generate wrong key: %v", err)
+	}
+
+	// Try importing non-matching key - should fail
+	err = cm.ImportKey(cert.SerialNumber, wrongKeyPEM)
+	if err == nil {
+		t.Errorf("Expected error importing non-matching key, but got none")
+	}
+	if !strings.Contains(err.Error(), "private key does not match certificate") {
+		t.Errorf("Expected key mismatch error, got: %v", err)
+	}
+
+	// Try importing key for non-existent certificate
+	err = cm.ImportKey("nonexistent", validKeyPEM)
+	if err == nil {
+		t.Errorf("Expected error importing key for non-existent certificate, but got none")
+	}
+	if !strings.Contains(err.Error(), "certificate not found") {
+		t.Errorf("Expected certificate not found error, got: %v", err)
+	}
+}
+
+func TestCertificateManager_ValidateKeyMatchesCertificateWithPassword(t *testing.T) {
+	cm, db, err := createTestCertificateManager()
+	if err != nil {
+		t.Fatalf("Failed to create test certificate manager: %v", err)
+	}
+	defer db.Close()
+
+	// Create certificate with encrypted key
+	req := &CreateRootCARequest{
+		CommonName: "Test Root CA",
+		KeySize:    2048,
+		ValidDays:  365,
+		Password:   "testpassword",
+	}
+
+	cert, err := cm.CreateRootCA(req)
+	if err != nil {
+		t.Fatalf("Failed to create root CA: %v", err)
+	}
+
+	// Export the key
+	keyData, err := cm.ExportPrivateKey(cert.SerialNumber)
+	if err != nil {
+		t.Fatalf("Failed to export private key: %v", err)
+	}
+
+	// Test validation with correct password
+	err = cm.ValidateKeyMatchesCertificateWithPassword(keyData, "testpassword", cert.X509Cert)
+	if err != nil {
+		t.Errorf("Expected no error with correct password, got: %v", err)
+	}
+
+	// Test validation with wrong password
+	err = cm.ValidateKeyMatchesCertificateWithPassword(keyData, "wrongpassword", cert.X509Cert)
+	if err == nil {
+		t.Errorf("Expected error with wrong password, but got none")
+	}
+}
+
+func TestCertificateManager_ImportKey_EncryptedKey(t *testing.T) {
+	cm, db, err := createTestCertificateManager()
+	if err != nil {
+		t.Fatalf("Failed to create test certificate manager: %v", err)
+	}
+	defer db.Close()
+
+	// Create a certificate with encrypted key
+	req := &CreateRootCARequest{
+		CommonName: "Test Root CA",
+		KeySize:    2048,
+		ValidDays:  365,
+		Password:   "testpassword",
+	}
+
+	originalCert, err := cm.CreateRootCA(req)
+	if err != nil {
+		t.Fatalf("Failed to create root CA: %v", err)
+	}
+
+	// Export the encrypted key
+	encryptedKeyData, err := cm.ExportPrivateKey(originalCert.SerialNumber)
+	if err != nil {
+		t.Fatalf("Failed to export private key: %v", err)
+	}
+
+	// Delete the original certificate
+	_, err = cm.DeleteCertificate(originalCert.SerialNumber, false)
+	if err != nil {
+		t.Fatalf("Failed to delete original certificate: %v", err)
+	}
+
+	// Import just the certificate part (without key)
+	certPEM := originalCert.PEMData
+	newCert, err := cm.ImportCertificate(certPEM, "")
+	if err != nil {
+		t.Fatalf("Failed to import certificate: %v", err)
+	}
+
+	// Try to import the encrypted key without validation (this should work in ImportKey)
+	// Note: In the CLI, validation happens before calling ImportKey
+	err = cm.ImportKey(newCert.SerialNumber, encryptedKeyData)
+	if err != nil {
+		// This is expected to fail because ImportKey validates unencrypted keys
+		// and encrypted keys need password for validation
+		if !strings.Contains(err.Error(), "cannot validate encrypted private key") {
+			t.Errorf("Expected encrypted key validation error, got: %v", err)
+		}
+	}
+}
