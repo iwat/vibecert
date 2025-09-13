@@ -53,3 +53,21 @@ End-entity certificate and key generated successfully:
   Key type: ecc
   Valid for: 365 days
 ```
+
+### Create PKCS12 for iOS
+
+```
+$ vibecert export-pkcs12 -cert-serial ab0d2b0906783305e668562be2f4f8e8
+Enter password for private key:
+Enter password for PKCS#12 file:
+PKCS#12 file exported successfully:
+  File: ab0d2b0906783305e668562be2f4f8e8.p12
+  Certificate: Dad's iPhone 15
+  Friendly name: Dad's iPhone 15
+  CA certificates included: 2
+
+To install on iOS:
+1. Email the .p12 file to yourself
+2. Open the attachment on your iOS device
+3. Follow the prompts to install the certificate
+```

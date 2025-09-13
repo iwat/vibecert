@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh/terminal"
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 type Certificate struct {
@@ -52,6 +53,8 @@ func main() {
 		runCreateIntermediateCommand()
 	case "create-leaf":
 		runCreateLeafCommand()
+	case "export-pkcs12":
+		runExportPKCS12Command()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -69,6 +72,7 @@ func printUsage() {
 	fmt.Println("  create-root      Generate a new root certificate and key")
 	fmt.Println("  create-intermediate Generate an intermediate CA certificate")
 	fmt.Println("  create-leaf      Generate an end-entity certificate")
+	fmt.Println("  export-pkcs12    Export certificate and key as PKCS#12 file")
 	fmt.Println("  help             Show this help message")
 	fmt.Println("")
 	fmt.Println("For command-specific help, use: vibecert <command> --help")
@@ -816,6 +820,173 @@ func runCreateLeafCommand() {
 	if len(template.EmailAddresses) > 0 {
 		fmt.Printf("  Email SANs: %s\n", strings.Join(template.EmailAddresses, ", "))
 	}
+}
+
+func runExportPKCS12Command() {
+	fs := flag.NewFlagSet("export-pkcs12", flag.ExitOnError)
+
+	var (
+		certSerial     = fs.String("cert-serial", "", "Serial number of certificate to export (required)")
+		outputFile     = fs.String("output", "", "Output PKCS#12 file path (default: data/pkcs12/{serial}.p12)")
+		friendlyName   = fs.String("name", "", "Friendly name for the certificate (default: certificate CN)")
+		includeCACerts = fs.Bool("include-ca", true, "Include CA certificates in the chain")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert export-pkcs12 [flags]")
+		fmt.Println("")
+		fmt.Println("Export a certificate and its private key as a PKCS#12 file for iOS.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	// Parse arguments starting from index 2
+	fs.Parse(os.Args[2:])
+
+	if *certSerial == "" {
+		fmt.Println("Error: cert-serial is required")
+		fmt.Println("Example: --cert-serial a1b2c3d4")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Ensure pkcs12 directory exists
+	if err := os.MkdirAll("data/pkcs12", 0755); err != nil {
+		log.Fatalf("Failed to create data/pkcs12 directory: %v", err)
+	}
+
+	// Load certificate
+	certPath := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", *certSerial))
+	keyPath := filepath.Join("data", "keys", fmt.Sprintf("%s.key", *certSerial))
+
+	cert, err := loadCertificateFromFile(certPath)
+	if err != nil {
+		log.Fatalf("Failed to load certificate: %v", err)
+	}
+
+	// Prompt for private key password
+	fmt.Print("Enter password for private key: ")
+	keyPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read key password: %v", err)
+	}
+	fmt.Println()
+	keyPassword := string(keyPasswordBytes)
+
+	privateKey, err := loadEncryptedPrivateKey(keyPath, keyPassword)
+	if err != nil {
+		log.Fatalf("Failed to load private key: %v", err)
+	}
+
+	// Prompt for PKCS#12 export password
+	fmt.Print("Enter password for PKCS#12 file: ")
+	p12PasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read PKCS#12 password: %v", err)
+	}
+	fmt.Println()
+	p12Password := string(p12PasswordBytes)
+
+	if len(p12Password) == 0 {
+		fmt.Println("Error: PKCS#12 password cannot be empty")
+		os.Exit(1)
+	}
+
+	// Set friendly name
+	name := *friendlyName
+	if name == "" {
+		name = cert.Subject.CommonName
+		if name == "" {
+			name = fmt.Sprintf("Certificate %s", *certSerial)
+		}
+	}
+
+	// Collect CA certificates if requested
+	var caCerts []*x509.Certificate
+	if *includeCACerts {
+		caCerts, err = collectCACertificates(cert)
+		if err != nil {
+			fmt.Printf("Warning: Failed to collect CA certificates: %v\n", err)
+		}
+	}
+
+	// Create PKCS#12 data
+	pfxData, err := pkcs12.Modern.Encode(privateKey, cert, caCerts, p12Password)
+	if err != nil {
+		log.Fatalf("Failed to create PKCS#12 data: %v", err)
+	}
+
+	// Determine output file
+	output := *outputFile
+	if output == "" {
+		output = filepath.Join("data", "pkcs12", fmt.Sprintf("%s.p12", *certSerial))
+	}
+
+	// Save PKCS#12 file
+	if err := os.WriteFile(output, pfxData, 0600); err != nil {
+		log.Fatalf("Failed to save PKCS#12 file: %v", err)
+	}
+
+	fmt.Printf("PKCS#12 file exported successfully:\n")
+	fmt.Printf("  File: %s\n", output)
+	fmt.Printf("  Certificate: %s\n", cert.Subject.CommonName)
+	fmt.Printf("  Friendly name: %s\n", name)
+	if len(caCerts) > 0 {
+		fmt.Printf("  CA certificates included: %d\n", len(caCerts))
+	}
+	fmt.Println("\nTo install on iOS:")
+	fmt.Println("1. Email the .p12 file to yourself")
+	fmt.Println("2. Open the attachment on your iOS device")
+	fmt.Println("3. Follow the prompts to install the certificate")
+}
+
+func collectCACertificates(leafCert *x509.Certificate) ([]*x509.Certificate, error) {
+	var caCerts []*x509.Certificate
+	currentIssuer := leafCert.Issuer.String()
+
+	// Load all certificates to find the chain
+	certsDir := filepath.Join("data", "certs")
+	files, err := os.ReadDir(certsDir)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a map of subject -> certificate for quick lookup
+	certMap := make(map[string]*x509.Certificate)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".crt") {
+			continue
+		}
+
+		certPath := filepath.Join(certsDir, file.Name())
+		cert, err := loadCertificateFromFile(certPath)
+		if err != nil {
+			continue // Skip certificates we can't load
+		}
+
+		certMap[cert.Subject.String()] = cert
+	}
+
+	// Follow the chain up to the root
+	for currentIssuer != "" {
+		caCert, exists := certMap[currentIssuer]
+		if !exists {
+			break // Chain is incomplete
+		}
+
+		caCerts = append(caCerts, caCert)
+
+		// If this is a self-signed certificate (root), stop
+		if caCert.Subject.String() == caCert.Issuer.String() {
+			break
+		}
+
+		// Move to the next level up
+		currentIssuer = caCert.Issuer.String()
+	}
+
+	return caCerts, nil
 }
 
 func generateUniqueSerial() (*big.Int, error) {

@@ -2,7 +2,10 @@ module github.com/iwat/vibecert
 
 go 1.24.3
 
-require golang.org/x/crypto v0.41.0
+require (
+	golang.org/x/crypto v0.41.0
+	software.sslmate.com/src/go-pkcs12 v0.6.0
+)
 
 require (
 	golang.org/x/sys v0.35.0 // indirect
