@@ -15,6 +15,7 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -46,19 +47,57 @@ type KeyPair struct {
 }
 
 var db *sql.DB
+var dbPath string
 
 func main() {
-	if err := initDatabase(); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+	// Parse global flags first
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help") {
+		printUsage()
+		os.Exit(0)
 	}
-	defer db.Close()
 
-	if len(os.Args) < 2 {
+	// Check for database flag
+	var command string
+	var commandArgs []string
+
+	for i, arg := range os.Args[1:] {
+		if arg == "--db" && i+2 < len(os.Args) {
+			dbPath = os.Args[i+2]
+			// Remove --db and its value from args
+			commandArgs = append(os.Args[1:i+1], os.Args[i+3:]...)
+		} else if strings.HasPrefix(arg, "--db=") {
+			dbPath = strings.TrimPrefix(arg, "--db=")
+			// Remove --db= from args
+			commandArgs = append(os.Args[1:i+1], os.Args[i+2:]...)
+		}
+	}
+
+	if commandArgs == nil {
+		commandArgs = os.Args[1:]
+	}
+
+	if len(commandArgs) < 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	command := os.Args[1]
+	if dbPath == "" {
+		var err error
+		dbPath, err = getDatabasePath()
+		if err != nil {
+			log.Fatalf("Failed to get database path: %v", err)
+		}
+	}
+
+	if err := initDatabase(dbPath); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer db.Close()
+
+	command = commandArgs[0]
+
+	// Update os.Args to use filtered command args for flag parsing
+	os.Args = append([]string{os.Args[0]}, commandArgs...)
 
 	switch command {
 	case "tree":
@@ -89,7 +128,10 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: vibecert <command> [arguments]")
+	fmt.Println("Usage: vibecert [global-options] <command> [arguments]")
+	fmt.Println("")
+	fmt.Println("Global options:")
+	fmt.Println("  --db <path>      Path to SQLite database file")
 	fmt.Println("")
 	fmt.Println("Available commands:")
 	fmt.Println("  tree             Display certificate dependency tree")
@@ -103,17 +145,47 @@ func printUsage() {
 	fmt.Println("  export-pkcs12    Export certificate and key as PKCS#12 file")
 	fmt.Println("  help             Show this help message")
 	fmt.Println("")
+	fmt.Println("Database location:")
+	fmt.Printf("  Default: %s\n", getDefaultDatabasePath())
+	fmt.Println("  Override with --db flag or VIBECERT_DB environment variable")
+	fmt.Println("")
 	fmt.Println("For command-specific help, use: vibecert <command> --help")
 }
 
-func initDatabase() error {
-	// Ensure data directory exists
-	if err := os.MkdirAll("data", 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %v", err)
+func getDatabasePath() (string, error) {
+	// Check if user provided explicit database path via environment variable
+	if dbPath := os.Getenv("VIBECERT_DB"); dbPath != "" {
+		// Ensure the directory exists
+		dir := filepath.Dir(dbPath)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return "", fmt.Errorf("failed to create database directory %s: %v", dir, err)
+		}
+		return dbPath, nil
 	}
 
+	return getDefaultDatabasePath(), nil
+}
+
+func getDefaultDatabasePath() string {
+	// Use standard user config directory
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		// Fallback to current directory if config dir is not available
+		return "./vibecert.db"
+	}
+
+	vibecertDir := filepath.Join(configDir, "vibecert")
+	if err := os.MkdirAll(vibecertDir, 0700); err != nil {
+		// Fallback to current directory if we can't create config dir
+		return "./vibecert.db"
+	}
+
+	return filepath.Join(vibecertDir, "vibecert.db")
+}
+
+func initDatabase(dbPath string) error {
 	var err error
-	db, err = sql.Open("sqlite3", "data/vibecert.db")
+	db, err = sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return err
 	}
@@ -219,16 +291,25 @@ func buildCertificateTree(certificates []*Certificate) []*Certificate {
 	}
 
 	var roots []*Certificate
+	hasParent := make(map[string]bool)
+
 	for _, cert := range certificates {
 		if cert.IsSelfSigned {
 			roots = append(roots, cert)
 		} else {
 			// Find parent by matching issuer
+			parentFound := false
 			for _, parent := range certificates {
 				if parent.Subject == cert.Issuer {
 					parent.Children = append(parent.Children, cert)
+					hasParent[cert.SerialNumber] = true
+					parentFound = true
 					break
 				}
+			}
+			// If no parent found, treat as orphan root
+			if !parentFound {
+				roots = append(roots, cert)
 			}
 		}
 	}

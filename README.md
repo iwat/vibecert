@@ -80,10 +80,21 @@ vibecert create-leaf --cn "Server Name" --ca-serial <parent_serial> [--san-dns "
 
 ## Migration from File-Based Storage
 
-If you have existing certificates stored in the `data/certs` and `data/keys` directories, you can import them:
+If you have existing certificates stored in the old `data/certs` and `data/keys` directories, you can import them:
 
 ```bash
-# Import all existing certificates with keys
+# Import all existing certificates with keys to default database
+for cert in data/certs/*.crt; do
+    serial=$(basename "$cert" .crt)
+    if [ -f "data/keys/${serial}.key" ]; then
+        vibecert import --cert "$cert" --key "data/keys/${serial}.key"
+    else
+        vibecert import --cert "$cert"
+    fi
+done
+
+# Import to a specific database (e.g., to preserve old data)
+export VIBECERT_DB=./legacy-certs.db
 for cert in data/certs/*.crt; do
     serial=$(basename "$cert" .crt)
     if [ -f "data/keys/${serial}.key" ]; then
@@ -96,14 +107,33 @@ done
 
 ## Database Location
 
-The SQLite database is stored at `data/vibecert.db`. You can query it directly using the `sqlite3` command-line tool:
+The SQLite database is stored in the user's standard configuration directory by default:
+
+- **Linux/Unix**: `$XDG_CONFIG_HOME/vibecert/vibecert.db` or `~/.config/vibecert/vibecert.db`
+- **macOS**: `~/Library/Application Support/vibecert/vibecert.db`
+- **Windows**: `%APPDATA%/vibecert/vibecert.db`
+
+### Database Path Options
+
+You can override the default database location using:
+
+1. **Command-line flag**: `vibecert --db /path/to/custom.db <command>`
+2. **Environment variable**: `export VIBECERT_DB=/path/to/custom.db`
+3. **Default location**: Uses OS-specific user config directory
+
+You can query the database directly using the `sqlite3` command-line tool:
 
 ```bash
-# View all certificates
-sqlite3 data/vibecert.db "SELECT serial_number, subject, CASE WHEN key_hash IS NULL THEN 'No' ELSE 'Yes' END as has_key FROM certificates;"
+# View all certificates (using default database location)
+vibecert --db ~/.config/vibecert/vibecert.db  # Linux example
+sqlite3 ~/.config/vibecert/vibecert.db "SELECT serial_number, subject, CASE WHEN key_hash IS NULL THEN 'No' ELSE 'Yes' END as has_key FROM certificates;"
 
-# View certificate details
-sqlite3 data/vibecert.db "SELECT * FROM certificates WHERE subject LIKE '%Root CA%';"
+# View certificate details with custom database
+export VIBECERT_DB=/path/to/custom.db
+sqlite3 "$VIBECERT_DB" "SELECT * FROM certificates WHERE subject LIKE '%Root CA%';"
+
+# Quick way to find your database location
+vibecert --help  # Shows default database path
 ```
 
 ## Security Considerations
@@ -111,13 +141,14 @@ sqlite3 data/vibecert.db "SELECT * FROM certificates WHERE subject LIKE '%Root C
 - Private keys are encrypted using AES-256-CBC with password-based encryption
 - Public key hashes are used to link certificates with their corresponding private keys
 - The SQLite database should be backed up regularly and stored securely
-- Consider setting appropriate file permissions on the `data/` directory (e.g., `chmod 700 data/`)
+- The default database directory is created with restrictive permissions (700)
+- Consider additional file system encryption for sensitive certificate environments
 
 ## Examples
 
 ### Basic Workflow
 ```bash
-# Create a root CA
+# Create a root CA (uses default database location)
 vibecert create-root --cn "My Root CA"
 
 # View the certificate tree
@@ -131,14 +162,20 @@ vibecert create-leaf --cn "server.example.com" --ca-serial <intermediate_serial>
 
 # Export the server certificate and key as PKCS#12 for deployment
 vibecert export-pkcs12 --serial <server_serial> --output server.p12 --name "Server Certificate"
+
+# Using custom database location
+vibecert --db /path/to/project.db tree
 ```
 
 ### Import Existing Certificates
 ```bash
-# Import a certificate chain
+# Import a certificate chain (to default database)
 vibecert import --cert root-ca.pem --key root-ca.key
 vibecert import --cert intermediate-ca.pem --key intermediate-ca.key
 vibecert import --cert server.pem --key server.key
+
+# Import to custom database location
+vibecert --db /path/to/project.db import --cert server.pem --key server.key
 
 # View the imported tree
 vibecert tree
@@ -149,6 +186,23 @@ vibecert tree
 ```bash
 go build -o vibecert .
 ```
+
+## Testing
+
+A comprehensive test script is provided to verify all database path functionality:
+
+```bash
+# Make the test script executable and run it
+chmod +x test_db_paths.sh
+./test_db_paths.sh
+```
+
+This script tests:
+- Default OS-specific database paths
+- Custom database paths via `--db` flag
+- Environment variable `VIBECERT_DB` support
+- Database path priority and override behavior
+- Cross-database operations and isolation
 
 ## Dependencies
 
