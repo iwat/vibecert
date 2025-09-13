@@ -1,5 +1,8 @@
 # vibecert
-Vibe Coding meets Certificate Management 💥🔐
+
+Vibe Coding meets Certificate Management 💥🔐💥
+
+How bad can this be? 🤔
 
 ## Usage
 
@@ -70,4 +73,13 @@ To install on iOS:
 1. Email the .p12 file to yourself
 2. Open the attachment on your iOS device
 3. Follow the prompts to install the certificate
+```
+
+### Listing
+
+```
+$ vibecert tree
+CN=Family CA V1,O=My Family,C=CA (...4083d985) [SELF-SIGNED]
+  CN=Family Intermediate CA V1,O=My Family,C=CA (...8758f9e6)
+    CN=Dad's iPhone 15,O=My Family,C=CA (...e2f4f8e8)
 ```
