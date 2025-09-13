@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,6 +50,8 @@ func main() {
 		runCreateRootCommand()
 	case "create-intermediate":
 		runCreateIntermediateCommand()
+	case "create-leaf":
+		runCreateLeafCommand()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -65,6 +68,7 @@ func printUsage() {
 	fmt.Println("  tree             Display certificate dependency tree")
 	fmt.Println("  create-root      Generate a new root certificate and key")
 	fmt.Println("  create-intermediate Generate an intermediate CA certificate")
+	fmt.Println("  create-leaf      Generate an end-entity certificate")
 	fmt.Println("  help             Show this help message")
 	fmt.Println("")
 	fmt.Println("For command-specific help, use: vibecert <command> --help")
@@ -578,6 +582,240 @@ func runCreateIntermediateCommand() {
 	fmt.Printf("  Key type: %s\n", *keyType)
 	fmt.Printf("  Valid for: %d days\n", *validDays)
 	fmt.Printf("  Path length constraint: %d\n", *pathLen)
+}
+
+func runCreateLeafCommand() {
+	fs := flag.NewFlagSet("create-leaf", flag.ExitOnError)
+
+	var (
+		keyType      = fs.String("key-type", "ecc", "Key type: ecc, rsa-2048, rsa-3072, or rsa-4096")
+		commonName   = fs.String("cn", "", "Common Name (required)")
+		organization = fs.String("org", "", "Organization name (required)")
+		country      = fs.String("country", "", "Country code (required, e.g., US)")
+		validDays    = fs.Int("valid-days", 365, "Certificate validity period in days (default: 1 year)")
+		caSerial     = fs.String("ca-serial", "", "Serial number of parent CA certificate (required)")
+		serverAuth   = fs.Bool("server-auth", false, "Enable TLS server authentication")
+		clientAuth   = fs.Bool("client-auth", false, "Enable TLS client authentication")
+		codeSigning  = fs.Bool("code-signing", false, "Enable code signing")
+		emailProtect = fs.Bool("email-protection", false, "Enable email protection")
+		sanDNS       = fs.String("san-dns", "", "DNS names for SAN (comma-separated)")
+		sanIP        = fs.String("san-ip", "", "IP addresses for SAN (comma-separated)")
+		sanEmail     = fs.String("san-email", "", "Email addresses for SAN (comma-separated)")
+	)
+
+	fs.Usage = func() {
+		fmt.Println("Usage: vibecert create-leaf [flags]")
+		fmt.Println("")
+		fmt.Println("Generate an end-entity certificate signed by an existing CA.")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+
+	// Parse arguments starting from index 2 (skip "vibecert" and "create-leaf")
+	fs.Parse(os.Args[2:])
+
+	if *commonName == "" || *organization == "" || *country == "" || *caSerial == "" {
+		fmt.Println("Error: cn, org, country, and ca-serial are required")
+		fmt.Println("Example: --cn 'server.example.com' --org 'My Organization' --country US --ca-serial a1b2c3d4")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Ensure directories exist
+	if err := os.MkdirAll("data/certs", 0755); err != nil {
+		log.Fatalf("Failed to create data/certs directory: %v", err)
+	}
+	if err := os.MkdirAll("data/keys", 0755); err != nil {
+		log.Fatalf("Failed to create data/keys directory: %v", err)
+	}
+
+	// Load parent CA certificate and key
+	caCertPath := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", *caSerial))
+	caKeyPath := filepath.Join("data", "keys", fmt.Sprintf("%s.key", *caSerial))
+
+	caCert, err := loadCertificateFromFile(caCertPath)
+	if err != nil {
+		log.Fatalf("Failed to load parent CA certificate: %v", err)
+	}
+
+	// Prompt for parent CA key password
+	fmt.Print("Enter password for parent CA private key: ")
+	caPasswordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read CA password: %v", err)
+	}
+	fmt.Println() // Add newline after password input
+	caPassword := string(caPasswordBytes)
+
+	caPrivateKey, err := loadEncryptedPrivateKey(caKeyPath, caPassword)
+	if err != nil {
+		log.Fatalf("Failed to load parent CA private key: %v", err)
+	}
+
+	// Verify that parent is a CA
+	if !caCert.IsCA {
+		log.Fatal("Parent certificate is not a CA certificate")
+	}
+
+	// Generate unique serial number
+	serialNum, err := generateUniqueSerial()
+	if err != nil {
+		log.Fatalf("Failed to generate unique serial number: %v", err)
+	}
+
+	// Prompt for password for new leaf key
+	fmt.Print("Enter password to encrypt new leaf private key: ")
+	passwordBytes, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		log.Fatalf("Failed to read password: %v", err)
+	}
+	fmt.Println() // Add newline after password input
+	password := string(passwordBytes)
+
+	if len(password) == 0 {
+		fmt.Println("Error: password cannot be empty")
+		os.Exit(1)
+	}
+
+	// Generate key pair for leaf certificate
+	var privateKey interface{}
+
+	switch *keyType {
+	case "ecc":
+		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case "rsa-2048":
+		privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "rsa-3072":
+		privateKey, err = rsa.GenerateKey(rand.Reader, 3072)
+	case "rsa-4096":
+		privateKey, err = rsa.GenerateKey(rand.Reader, 4096)
+	default:
+		fmt.Printf("Error: unsupported key type '%s'\n", *keyType)
+		fmt.Println("Supported types: ecc, rsa-2048, rsa-3072, rsa-4096")
+		os.Exit(1)
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to generate private key: %v", err)
+	}
+
+	// Create subject distinguished name
+	subjectDN := pkix.Name{
+		CommonName:   *commonName,
+		Organization: []string{*organization},
+		Country:      []string{*country},
+	}
+
+	// Create certificate template for end-entity certificate
+	template := x509.Certificate{
+		SerialNumber: serialNum,
+		Subject:      subjectDN,
+		Issuer:       caCert.Subject, // Issued by parent CA
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(0, 0, *validDays),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{},
+		BasicConstraintsValid: true,
+		IsCA:                  false, // This is an end-entity certificate
+	}
+
+	// Set extended key usage based on flags
+	if *serverAuth {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
+	}
+	if *clientAuth {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
+	}
+	if *codeSigning {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageCodeSigning)
+	}
+	if *emailProtect {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageEmailProtection)
+	}
+
+	// If no extended key usage is specified, default to server auth
+	if len(template.ExtKeyUsage) == 0 {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
+	}
+
+	// Parse and add Subject Alternative Names
+	if *sanDNS != "" {
+		dnsNames := strings.Split(*sanDNS, ",")
+		for i, name := range dnsNames {
+			dnsNames[i] = strings.TrimSpace(name)
+		}
+		template.DNSNames = dnsNames
+	}
+
+	if *sanIP != "" {
+		ipStrs := strings.Split(*sanIP, ",")
+		for _, ipStr := range ipStrs {
+			ip := net.ParseIP(strings.TrimSpace(ipStr))
+			if ip != nil {
+				template.IPAddresses = append(template.IPAddresses, ip)
+			}
+		}
+	}
+
+	if *sanEmail != "" {
+		emails := strings.Split(*sanEmail, ",")
+		for i, email := range emails {
+			emails[i] = strings.TrimSpace(email)
+		}
+		template.EmailAddresses = emails
+	}
+
+	// Generate certificate (signed by parent CA)
+	var publicKey interface{}
+	switch k := privateKey.(type) {
+	case *ecdsa.PrivateKey:
+		publicKey = &k.PublicKey
+	case *rsa.PrivateKey:
+		publicKey = &k.PublicKey
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, caCert, publicKey, caPrivateKey)
+	if err != nil {
+		log.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	// Generate file names based on serial number
+	serialStr := fmt.Sprintf("%x", serialNum)
+	keyFile := filepath.Join("data", "keys", fmt.Sprintf("%s.key", serialStr))
+	certFile := filepath.Join("data", "certs", fmt.Sprintf("%s.crt", serialStr))
+
+	// Save private key (encrypted)
+	if err := saveEncryptedPrivateKey(keyFile, privateKey, password); err != nil {
+		log.Fatalf("Failed to save private key: %v", err)
+	}
+
+	// Save certificate
+	if err := saveCertificate(certFile, certBytes); err != nil {
+		log.Fatalf("Failed to save certificate: %v", err)
+	}
+
+	fmt.Printf("End-entity certificate and key generated successfully:\n")
+	fmt.Printf("  Private key: %s (encrypted)\n", keyFile)
+	fmt.Printf("  Certificate: %s\n", certFile)
+	fmt.Printf("  Serial number: %s\n", serialStr)
+	fmt.Printf("  Parent CA: %s\n", *caSerial)
+	fmt.Printf("  Key type: %s\n", *keyType)
+	fmt.Printf("  Valid for: %d days\n", *validDays)
+	if len(template.DNSNames) > 0 {
+		fmt.Printf("  DNS SANs: %s\n", strings.Join(template.DNSNames, ", "))
+	}
+	if len(template.IPAddresses) > 0 {
+		var ipStrs []string
+		for _, ip := range template.IPAddresses {
+			ipStrs = append(ipStrs, ip.String())
+		}
+		fmt.Printf("  IP SANs: %s\n", strings.Join(ipStrs, ", "))
+	}
+	if len(template.EmailAddresses) > 0 {
+		fmt.Printf("  Email SANs: %s\n", strings.Join(template.EmailAddresses, ", "))
+	}
 }
 
 func generateUniqueSerial() (*big.Int, error) {
