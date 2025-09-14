@@ -94,30 +94,27 @@ func main() {
 
 	command = commandArgs[0]
 
-	// Update os.Args to use filtered command args for flag parsing
-	os.Args = append([]string{os.Args[0]}, commandArgs...)
-
 	switch command {
 	case "tree":
 		cli.runTreeCommand()
+	case "certificate", "cert":
+		if len(commandArgs) < 2 {
+			printCertificateUsage()
+			os.Exit(1)
+		}
+		cli.runCertificateCommand(commandArgs[1:])
+	case "key":
+		if len(commandArgs) < 2 {
+			printKeyUsage()
+			os.Exit(1)
+		}
+		cli.runKeyCommand(commandArgs[1:])
 	case "create-root":
 		cli.runCreateRootCommand()
 	case "create-intermediate":
 		cli.runCreateIntermediateCommand()
 	case "create-leaf":
 		cli.runCreateLeafCommand()
-	case "import":
-		cli.runImportCommand()
-	case "import-key":
-		cli.runImportKeyCommand()
-	case "export-cert":
-		cli.runExportCertCommand()
-	case "export-key":
-		cli.runExportKeyCommand()
-	case "reencrypt-key":
-		cli.runReencryptKeyCommand()
-	case "delete":
-		cli.runDeleteCommand()
 	case "export-pkcs12":
 		cli.runExportPKCS12Command()
 	case "help", "-h", "--help":
@@ -155,35 +152,60 @@ func (cli *CLI) Close() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: vibecert [global-options] <command> [arguments]")
+	fmt.Println("Usage: vibecert [global-options] <command> [subcommand] [arguments]")
 	fmt.Println("")
 	fmt.Println("Global options:")
 	fmt.Println("  --db <path>      Path to SQLite database file")
 	fmt.Println("")
 	fmt.Println("Available commands:")
-	fmt.Println("  tree             Display certificate dependency tree")
+	fmt.Println("  tree                Display certificate dependency tree")
+	fmt.Println("")
+	fmt.Println("Certificate operations:")
+	fmt.Println("  certificate import  Import certificate from file")
+	fmt.Println("  certificate export  Export certificate with human-readable content")
+	fmt.Println("  certificate delete  Delete certificate and its private key")
+	fmt.Println("")
+	fmt.Println("Key operations:")
+	fmt.Println("  key import          Import private key from file")
+	fmt.Println("  key export          Export private key")
+	fmt.Println("  key reencrypt       Change private key password")
 	fmt.Println("")
 	fmt.Println("Certificate Creation:")
-	fmt.Println("  create-root      Generate a new root certificate and key")
+	fmt.Println("  create-root         Generate a new root certificate and key")
 	fmt.Println("  create-intermediate Generate an intermediate CA certificate")
-	fmt.Println("  create-leaf      Generate an end-entity certificate")
+	fmt.Println("  create-leaf         Generate an end-entity certificate")
 	fmt.Println("")
-	fmt.Println("Certificate Management:")
-	fmt.Println("  import           Import certificate and optional key")
-	fmt.Println("  import-key       Import private key for existing certificate")
-	fmt.Println("  export-cert      Export certificate with human-readable content")
-	fmt.Println("  export-key       Export encrypted private key")
-	fmt.Println("  export-pkcs12    Export certificate and key as PKCS#12 file")
-	fmt.Println("  reencrypt-key    Change private key password")
-	fmt.Println("  delete           Delete certificate and its private key")
-	fmt.Println("")
-	fmt.Println("  help             Show this help message")
+	fmt.Println("Other operations:")
+	fmt.Println("  export-pkcs12       Export certificate and key as PKCS#12 file")
+	fmt.Println("  help                Show this help message")
 	fmt.Println("")
 	fmt.Println("Database location:")
 	fmt.Printf("  Default: %s\n", getDefaultDatabasePath())
 	fmt.Println("  Override with --db flag or VIBECERT_DB environment variable")
 	fmt.Println("")
 	fmt.Println("For command-specific help, use: vibecert <command> --help")
+}
+
+func printCertificateUsage() {
+	fmt.Println("Usage: vibecert certificate <subcommand> [arguments]")
+	fmt.Println("")
+	fmt.Println("Available subcommands:")
+	fmt.Println("  import    Import certificate from file")
+	fmt.Println("  export    Export certificate with human-readable content")
+	fmt.Println("  delete    Delete certificate and its private key")
+	fmt.Println("")
+	fmt.Println("For subcommand-specific help, use: vibecert certificate <subcommand> --help")
+}
+
+func printKeyUsage() {
+	fmt.Println("Usage: vibecert key <subcommand> [arguments]")
+	fmt.Println("")
+	fmt.Println("Available subcommands:")
+	fmt.Println("  import     Import private key from file")
+	fmt.Println("  export     Export private key")
+	fmt.Println("  reencrypt  Change private key password")
+	fmt.Println("")
+	fmt.Println("For subcommand-specific help, use: vibecert key <subcommand> --help")
 }
 
 func getDatabasePath() (string, error) {
@@ -250,24 +272,69 @@ func (cli *CLI) printCertificateTree(certificates []*Certificate, indent int) {
 	}
 }
 
-func (cli *CLI) runImportCommand() {
-	fs := flag.NewFlagSet("import", flag.ExitOnError)
+func (cli *CLI) runCertificateCommand(args []string) {
+	if len(args) == 0 {
+		printCertificateUsage()
+		os.Exit(1)
+	}
+
+	subcommand := args[0]
+	switch subcommand {
+	case "import":
+		cli.runCertificateImportCommand(args[1:])
+	case "export":
+		cli.runCertificateExportCommand(args[1:])
+	case "delete":
+		cli.runCertificateDeleteCommand(args[1:])
+	case "help", "-h", "--help":
+		printCertificateUsage()
+	default:
+		fmt.Printf("Unknown certificate subcommand: %s\n\n", subcommand)
+		printCertificateUsage()
+		os.Exit(1)
+	}
+}
+
+func (cli *CLI) runKeyCommand(args []string) {
+	if len(args) == 0 {
+		printKeyUsage()
+		os.Exit(1)
+	}
+
+	subcommand := args[0]
+	switch subcommand {
+	case "import":
+		cli.runKeyImportCommand(args[1:])
+	case "export":
+		cli.runKeyExportCommand(args[1:])
+	case "reencrypt":
+		cli.runKeyReencryptCommand(args[1:])
+	case "help", "-h", "--help":
+		printKeyUsage()
+	default:
+		fmt.Printf("Unknown key subcommand: %s\n\n", subcommand)
+		printKeyUsage()
+		os.Exit(1)
+	}
+}
+
+func (cli *CLI) runCertificateImportCommand(args []string) {
+	fs := flag.NewFlagSet("certificate import", flag.ExitOnError)
 
 	var (
 		certFile = fs.String("cert", "", "Certificate file path (required)")
-		keyFile  = fs.String("key", "", "Private key file path (optional)")
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert import [flags]")
+		fmt.Println("Usage: vibecert certificate import [flags]")
 		fmt.Println("")
-		fmt.Println("Import a certificate and optionally its private key.")
+		fmt.Println("Import a certificate from file.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 
 	if *certFile == "" {
 		fmt.Println("Error: cert file is required")
@@ -281,16 +348,7 @@ func (cli *CLI) runImportCommand() {
 		log.Fatalf("Failed to read certificate file: %v", err)
 	}
 
-	var keyData string
-	if *keyFile != "" {
-		keyBytes, err := os.ReadFile(*keyFile)
-		if err != nil {
-			log.Fatalf("Failed to read key file: %v", err)
-		}
-		keyData = string(keyBytes)
-	}
-
-	cert, err := cli.cm.ImportCertificate(string(certData), keyData)
+	cert, err := cli.cm.ImportCertificate(string(certData))
 	if err != nil {
 		log.Fatalf("Failed to import certificate: %v", err)
 	}
@@ -298,37 +356,32 @@ func (cli *CLI) runImportCommand() {
 	fmt.Printf("Certificate imported successfully:\n")
 	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
 	fmt.Printf("  Subject: %s\n", cert.Subject)
+	fmt.Printf("  Key Hash: %s\n", cert.KeyHash)
 	if cert.KeyHash != "" {
-		fmt.Printf("  Private key: imported\n")
+		fmt.Printf("  Private key: found matching key\n")
 	} else {
-		fmt.Printf("  Private key: not provided\n")
+		fmt.Printf("  Private key: not found (import key separately)\n")
 	}
 }
 
-func (cli *CLI) runImportKeyCommand() {
-	fs := flag.NewFlagSet("import-key", flag.ExitOnError)
+func (cli *CLI) runKeyImportCommand(args []string) {
+	fs := flag.NewFlagSet("key import", flag.ExitOnError)
 
 	var (
-		serial  = fs.String("serial", "", "Certificate serial number (required)")
 		keyFile = fs.String("key", "", "Private key file path (required)")
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert import-key [flags]")
+		fmt.Println("Usage: vibecert key import [flags]")
 		fmt.Println("")
-		fmt.Println("Import a private key for an existing certificate.")
+		fmt.Println("Import a private key from file. The key will be automatically")
+		fmt.Println("linked to any matching certificates.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(os.Args[2:])
-
-	if *serial == "" {
-		fmt.Println("Error: serial number is required")
-		fs.Usage()
-		os.Exit(1)
-	}
+	fs.Parse(args)
 
 	if *keyFile == "" {
 		fmt.Println("Error: key file is required")
@@ -342,8 +395,10 @@ func (cli *CLI) runImportKeyCommand() {
 		log.Fatalf("Failed to read key file: %v", err)
 	}
 
-	// Check if the key is encrypted and get password if needed
 	keyData := string(keyBytes)
+	var keyHash string
+
+	// Check if the key is encrypted and get password if needed
 	block, _ := pem.Decode(keyBytes)
 	if block != nil && x509.IsEncryptedPEMBlock(block) {
 		fmt.Print("Private key is encrypted. Enter password: ")
@@ -353,28 +408,41 @@ func (cli *CLI) runImportKeyCommand() {
 		}
 		fmt.Println()
 
-		// Validate the key with password before importing
-		cert, err := cli.cm.GetCertificate(*serial)
+		keyHash, err = cli.cm.ImportKeyWithPassword(keyData, string(passwordBytes))
 		if err != nil {
-			log.Fatalf("Failed to get certificate: %v", err)
+			log.Fatalf("Failed to import key: %v", err)
 		}
-
-		err = cli.cm.ValidateKeyMatchesCertificateWithPassword(keyData, string(passwordBytes), cert.X509Cert)
+	} else {
+		keyHash, err = cli.cm.ImportKey(keyData)
 		if err != nil {
-			log.Fatalf("Key validation failed: %v", err)
+			log.Fatalf("Failed to import key: %v", err)
 		}
 	}
 
-	err = cli.cm.ImportKey(*serial, keyData)
-	if err != nil {
-		log.Fatalf("Failed to import key: %v", err)
-	}
+	fmt.Printf("Private key imported successfully:\n")
+	fmt.Printf("  Key Hash: %s\n", keyHash)
 
-	fmt.Printf("Private key imported successfully for certificate with serial: %s\n", *serial)
+	// Check if any certificates were linked
+	rows, err := cli.cm.db.Query("SELECT serial_number, subject FROM certificates WHERE key_hash = ?", keyHash)
+	if err == nil {
+		defer rows.Close()
+		linkedCerts := 0
+		fmt.Printf("  Linked certificates:\n")
+		for rows.Next() {
+			var serial, subject string
+			if rows.Scan(&serial, &subject) == nil {
+				fmt.Printf("    - %s (%s)\n", subject, serial)
+				linkedCerts++
+			}
+		}
+		if linkedCerts == 0 {
+			fmt.Printf("    - No matching certificates found\n")
+		}
+	}
 }
 
-func (cli *CLI) runExportCertCommand() {
-	fs := flag.NewFlagSet("export-cert", flag.ExitOnError)
+func (cli *CLI) runCertificateExportCommand(args []string) {
+	fs := flag.NewFlagSet("certificate export", flag.ExitOnError)
 
 	var (
 		serial     = fs.String("serial", "", "Certificate serial number (required)")
@@ -382,7 +450,7 @@ func (cli *CLI) runExportCertCommand() {
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert export-cert [flags]")
+		fmt.Println("Usage: vibecert certificate export [flags]")
 		fmt.Println("")
 		fmt.Println("Export certificate with human-readable content similar to 'openssl x509 -text'.")
 		fmt.Println("")
@@ -390,7 +458,7 @@ func (cli *CLI) runExportCertCommand() {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 
 	if *serial == "" {
 		fmt.Println("Error: serial number is required")
@@ -412,8 +480,8 @@ func (cli *CLI) runExportCertCommand() {
 	fmt.Printf("Certificate exported to: %s\n", outputPath)
 }
 
-func (cli *CLI) runExportKeyCommand() {
-	fs := flag.NewFlagSet("export-key", flag.ExitOnError)
+func (cli *CLI) runKeyExportCommand(args []string) {
+	fs := flag.NewFlagSet("key export", flag.ExitOnError)
 
 	var (
 		serial     = fs.String("serial", "", "Certificate serial number (required)")
@@ -421,15 +489,15 @@ func (cli *CLI) runExportKeyCommand() {
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert export-key [flags]")
+		fmt.Println("Usage: vibecert key export [flags]")
 		fmt.Println("")
-		fmt.Println("Export the encrypted private key for a certificate.")
+		fmt.Println("Export encrypted private key for a certificate.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 
 	if *serial == "" {
 		fmt.Println("Error: serial number is required")
@@ -451,23 +519,23 @@ func (cli *CLI) runExportKeyCommand() {
 	fmt.Printf("Private key exported to: %s\n", outputPath)
 }
 
-func (cli *CLI) runReencryptKeyCommand() {
-	fs := flag.NewFlagSet("reencrypt-key", flag.ExitOnError)
+func (cli *CLI) runKeyReencryptCommand(args []string) {
+	fs := flag.NewFlagSet("key reencrypt", flag.ExitOnError)
 
 	var (
 		serial = fs.String("serial", "", "Certificate serial number (required)")
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert reencrypt-key [flags]")
+		fmt.Println("Usage: vibecert key reencrypt [flags]")
 		fmt.Println("")
-		fmt.Println("Change the password of a private key.")
+		fmt.Println("Change the password of an encrypted private key.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 
 	if *serial == "" {
 		fmt.Println("Error: serial number is required")
@@ -511,8 +579,8 @@ func (cli *CLI) runReencryptKeyCommand() {
 	fmt.Printf("Private key password changed successfully for certificate %s\n", *serial)
 }
 
-func (cli *CLI) runDeleteCommand() {
-	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+func (cli *CLI) runCertificateDeleteCommand(args []string) {
+	fs := flag.NewFlagSet("certificate delete", flag.ExitOnError)
 
 	var (
 		serial = fs.String("serial", "", "Certificate serial number to delete (required)")
@@ -520,15 +588,15 @@ func (cli *CLI) runDeleteCommand() {
 	)
 
 	fs.Usage = func() {
-		fmt.Println("Usage: vibecert delete [flags]")
+		fmt.Println("Usage: vibecert certificate delete [flags]")
 		fmt.Println("")
-		fmt.Println("Delete a certificate and its associated private key from the database.")
+		fmt.Println("Delete a certificate and optionally its private key.")
 		fmt.Println("")
 		fmt.Println("Flags:")
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 
 	if *serial == "" {
 		fmt.Println("Error: serial number is required")

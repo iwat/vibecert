@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
@@ -15,8 +16,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"crypto/dsa"
 
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/term"
@@ -123,10 +122,10 @@ func (cm *CertificateManager) InitializeDatabase() error {
 			not_after DATETIME NOT NULL,
 			pem_data TEXT NOT NULL,
 			key_hash TEXT,
+			expected_key_hash TEXT NOT NULL,
 			is_self_signed BOOLEAN NOT NULL,
 			is_root BOOLEAN NOT NULL,
-			is_ca BOOLEAN NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			is_ca BOOLEAN NOT NULL
 		)
 	`)
 	if err != nil {
@@ -144,48 +143,38 @@ func (cm *CertificateManager) InitializeDatabase() error {
 	return err
 }
 
-// ImportCertificate imports a certificate and optionally its private key
-func (cm *CertificateManager) ImportCertificate(certPEM string, keyPEM string) (*Certificate, error) {
-	return cm.importCertificateWithValidation(certPEM, keyPEM, true)
-}
-
-// importCertificateWithValidation imports a certificate with optional key validation
-func (cm *CertificateManager) importCertificateWithValidation(certPEM string, keyPEM string, validateKey bool) (*Certificate, error) {
+// ImportCertificate imports a certificate without a private key
+func (cm *CertificateManager) ImportCertificate(certPEM string) (*Certificate, error) {
 	cert, err := cm.parseCertificateFromPEM(certPEM)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
 
-	// Calculate key hash from certificate's public key
-	keyHash := cm.calculatePublicKeyHash(cert.X509Cert)
+	// Calculate expected key hash from certificate's public key
+	expectedKeyHash := cm.calculatePublicKeyHash(cert.X509Cert)
 
-	// Import key if provided
-	if keyPEM != "" {
-		// Validate that the private key matches the certificate (unless validation is skipped)
-		if validateKey {
-			if err := cm.validateKeyMatchesCertificate(keyPEM, cert.X509Cert); err != nil {
-				return nil, fmt.Errorf("private key does not match certificate: %v", err)
-			}
-		}
+	// Check if a matching key already exists
+	var existingKeyData string
+	err = cm.db.QueryRow("SELECT pem_data FROM keys WHERE public_key_hash = ?", expectedKeyHash).Scan(&existingKeyData)
+	hasMatchingKey := (err == nil)
 
-		_, err = cm.db.Exec(`
-			INSERT OR REPLACE INTO keys (public_key_hash, pem_data)
-			VALUES (?, ?)
-		`, keyHash, keyPEM)
-		if err != nil {
-			return nil, fmt.Errorf("failed to store key: %v", err)
-		}
-		cert.KeyHash = keyHash
+	// Store certificate with key_hash set only if a matching key exists
+	var keyHashForDB interface{}
+	if hasMatchingKey {
+		keyHashForDB = expectedKeyHash
+		cert.KeyHash = expectedKeyHash
+	} else {
+		keyHashForDB = nil
+		cert.KeyHash = "" // No key available
 	}
 
-	// Store certificate
 	_, err = cm.db.Exec(`
 		INSERT OR REPLACE INTO certificates
 		(serial_number, subject, issuer, not_before, not_after,
-		 pem_data, key_hash, is_self_signed, is_root, is_ca)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 pem_data, key_hash, expected_key_hash, is_self_signed, is_root, is_ca)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, cert.SerialNumber, cert.Subject, cert.Issuer, cert.NotBefore, cert.NotAfter,
-		cert.PEMData, cert.KeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
+		cert.PEMData, keyHashForDB, expectedKeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store certificate: %v", err)
 	}
@@ -198,13 +187,14 @@ func (cm *CertificateManager) GetCertificate(serialNumber string) (*Certificate,
 	var cert Certificate
 	var keyHash sql.NullString
 
+	var expectedKeyHash string
 	err := cm.db.QueryRow(`
 		SELECT serial_number, subject, issuer, not_before, not_after,
-		       pem_data, key_hash, is_self_signed, is_root, is_ca
+		       pem_data, key_hash, expected_key_hash, is_self_signed, is_root, is_ca
 		FROM certificates
 		WHERE serial_number = ?
 	`, serialNumber).Scan(&cert.SerialNumber, &cert.Subject, &cert.Issuer,
-		&cert.NotBefore, &cert.NotAfter, &cert.PEMData, &keyHash,
+		&cert.NotBefore, &cert.NotAfter, &cert.PEMData, &keyHash, &expectedKeyHash,
 		&cert.IsSelfSigned, &cert.IsRoot, &cert.IsCA)
 
 	if err != nil {
@@ -232,8 +222,9 @@ func (cm *CertificateManager) GetCertificate(serialNumber string) (*Certificate,
 func (cm *CertificateManager) GetAllCertificates() ([]*Certificate, error) {
 	rows, err := cm.db.Query(`
 		SELECT serial_number, subject, issuer, not_before, not_after,
-		       pem_data, key_hash, is_self_signed, is_root, is_ca
+		       pem_data, key_hash, expected_key_hash, is_self_signed, is_root, is_ca
 		FROM certificates
+		ORDER BY subject
 	`)
 	if err != nil {
 		return nil, err
@@ -245,8 +236,9 @@ func (cm *CertificateManager) GetAllCertificates() ([]*Certificate, error) {
 		cert := &Certificate{}
 		var keyHash sql.NullString
 
-		err := rows.Scan(&cert.SerialNumber, &cert.Subject, &cert.Issuer,
-			&cert.NotBefore, &cert.NotAfter, &cert.PEMData, &keyHash,
+		var expectedKeyHash string
+		err = rows.Scan(&cert.SerialNumber, &cert.Subject, &cert.Issuer,
+			&cert.NotBefore, &cert.NotAfter, &cert.PEMData, &keyHash, &expectedKeyHash,
 			&cert.IsSelfSigned, &cert.IsRoot, &cert.IsCA)
 		if err != nil {
 			return nil, err
@@ -502,21 +494,13 @@ type CreateRootCARequest struct {
 	Password   string
 }
 
-// ImportKey imports a private key for an existing certificate
-func (cm *CertificateManager) ImportKey(serialNumber string, keyPEM string) error {
-	// Get the certificate first
-	cert, err := cm.GetCertificate(serialNumber)
+// ImportKey imports a private key, calculating its hash from the key itself
+func (cm *CertificateManager) ImportKey(keyPEM string) (string, error) {
+	// Calculate key hash from the private key
+	keyHash, err := cm.calculatePrivateKeyHash(keyPEM)
 	if err != nil {
-		return fmt.Errorf("certificate not found: %v", err)
+		return "", fmt.Errorf("failed to calculate key hash: %v", err)
 	}
-
-	// Validate that the private key matches the certificate
-	if err := cm.validateKeyMatchesCertificate(keyPEM, cert.X509Cert); err != nil {
-		return fmt.Errorf("private key does not match certificate: %v", err)
-	}
-
-	// Calculate key hash from certificate's public key
-	keyHash := cm.calculatePublicKeyHash(cert.X509Cert)
 
 	// Store the key
 	_, err = cm.db.Exec(`
@@ -524,18 +508,112 @@ func (cm *CertificateManager) ImportKey(serialNumber string, keyPEM string) erro
 		VALUES (?, ?)
 	`, keyHash, keyPEM)
 	if err != nil {
-		return fmt.Errorf("failed to store key: %v", err)
+		return "", fmt.Errorf("failed to store key: %v", err)
 	}
 
-	// Update the certificate to link to the key
+	// Update any certificates that match this key hash
+	// Get all certificates without keys that have this expected key hash
 	_, err = cm.db.Exec(`
-		UPDATE certificates SET key_hash = ? WHERE serial_number = ?
-	`, keyHash, serialNumber)
+		UPDATE certificates SET key_hash = ? WHERE key_hash IS NULL AND expected_key_hash = ?
+	`, keyHash, keyHash)
 	if err != nil {
-		return fmt.Errorf("failed to update certificate: %v", err)
+		return keyHash, nil // Key stored successfully, but couldn't update certificates
 	}
 
-	return nil
+	return keyHash, nil
+}
+
+// calculatePrivateKeyHash calculates the SHA256 hash of the public key derived from a private key
+func (cm *CertificateManager) calculatePrivateKeyHash(keyPEM string) (string, error) {
+	// Parse the private key (try without password first)
+	privateKey, err := cm.loadPrivateKeyFromPEM(keyPEM, "")
+	if err != nil {
+		// If decryption failed, it might be encrypted
+		block, _ := pem.Decode([]byte(keyPEM))
+		if block == nil {
+			return "", fmt.Errorf("failed to decode PEM block")
+		}
+
+		if x509.IsEncryptedPEMBlock(block) {
+			return "", fmt.Errorf("cannot calculate hash for encrypted private key without password")
+		}
+		return "", fmt.Errorf("failed to parse private key: %v", err)
+	}
+
+	// Extract public key from private key
+	var publicKey any
+	switch priv := privateKey.(type) {
+	case *rsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *ecdsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *dsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	default:
+		return "", fmt.Errorf("unsupported private key type: %T", privateKey)
+	}
+
+	// Marshal the public key
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal public key: %v", err)
+	}
+
+	// Calculate SHA256 hash
+	hash := sha256.Sum256(publicKeyBytes)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// ImportKeyWithPassword imports an encrypted private key with the provided password
+func (cm *CertificateManager) ImportKeyWithPassword(keyPEM, password string) (string, error) {
+	// Parse the private key with password
+	privateKey, err := cm.loadPrivateKeyFromPEM(keyPEM, password)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt and parse private key: %v", err)
+	}
+
+	// Extract public key from private key
+	var publicKey any
+	switch priv := privateKey.(type) {
+	case *rsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *ecdsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	case *dsa.PrivateKey:
+		publicKey = &priv.PublicKey
+	default:
+		return "", fmt.Errorf("unsupported private key type: %T", privateKey)
+	}
+
+	// Marshal the public key
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal public key: %v", err)
+	}
+
+	// Calculate SHA256 hash
+	hash := sha256.Sum256(publicKeyBytes)
+	keyHash := hex.EncodeToString(hash[:])
+
+	// Store the key
+	_, err = cm.db.Exec(`
+		INSERT OR REPLACE INTO keys (public_key_hash, pem_data)
+		VALUES (?, ?)
+	`, keyHash, keyPEM)
+	if err != nil {
+		return "", fmt.Errorf("failed to store key: %v", err)
+	}
+
+	// Update any certificates that match this key hash
+	// Get all certificates without keys that have this expected key hash
+	_, err = cm.db.Exec(`
+		UPDATE certificates SET key_hash = ? WHERE key_hash IS NULL AND expected_key_hash = ?
+	`, keyHash, keyHash)
+	if err != nil {
+		return keyHash, nil // Key stored successfully, but couldn't update certificates
+	}
+
+	return keyHash, nil
 }
 
 func (cm *CertificateManager) CreateRootCA(req *CreateRootCARequest) (*Certificate, error) {
@@ -564,6 +642,12 @@ func (cm *CertificateManager) CreateRootCA(req *CreateRootCARequest) (*Certifica
 		return nil, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
+	// Parse the certificate to get X509 object
+	x509Cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate: %v", err)
+	}
+
 	// Convert to PEM format
 	certPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
@@ -576,8 +660,44 @@ func (cm *CertificateManager) CreateRootCA(req *CreateRootCARequest) (*Certifica
 		return nil, fmt.Errorf("failed to encrypt private key: %v", err)
 	}
 
-	// Import the certificate without validation (we know the key matches since we just created it)
-	return cm.importCertificateWithValidation(string(certPEM), keyPEM, false)
+	// Store the key first
+	keyHash := cm.calculatePublicKeyHash(x509Cert)
+	_, err = cm.db.Exec(`
+		INSERT OR REPLACE INTO keys (public_key_hash, pem_data)
+		VALUES (?, ?)
+	`, keyHash, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store key: %v", err)
+	}
+
+	// Create certificate object
+	certificate := &Certificate{
+		SerialNumber: x509Cert.SerialNumber.String(),
+		Subject:      x509Cert.Subject.String(),
+		Issuer:       x509Cert.Issuer.String(),
+		NotBefore:    x509Cert.NotBefore,
+		NotAfter:     x509Cert.NotAfter,
+		PEMData:      string(certPEM),
+		KeyHash:      keyHash,
+		IsSelfSigned: x509Cert.Subject.String() == x509Cert.Issuer.String(),
+		IsRoot:       x509Cert.IsCA && x509Cert.Subject.String() == x509Cert.Issuer.String(),
+		IsCA:         x509Cert.IsCA,
+		X509Cert:     x509Cert,
+	}
+
+	// Store certificate
+	_, err = cm.db.Exec(`
+		INSERT OR REPLACE INTO certificates
+		(serial_number, subject, issuer, not_before, not_after,
+		 pem_data, key_hash, expected_key_hash, is_self_signed, is_root, is_ca)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, certificate.SerialNumber, certificate.Subject, certificate.Issuer, certificate.NotBefore, certificate.NotAfter,
+		certificate.PEMData, certificate.KeyHash, keyHash, certificate.IsSelfSigned, certificate.IsRoot, certificate.IsCA)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store certificate: %v", err)
+	}
+
+	return certificate, nil
 }
 
 // Helper methods
