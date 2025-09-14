@@ -95,8 +95,6 @@ func main() {
 	command = commandArgs[0]
 
 	switch command {
-	case "tree":
-		cli.runTreeCommand()
 	case "certificate", "cert":
 		if len(commandArgs) < 2 {
 			printCertificateUsage()
@@ -157,10 +155,8 @@ func printUsage() {
 	fmt.Println("Global options:")
 	fmt.Println("  --db <path>      Path to SQLite database file")
 	fmt.Println("")
-	fmt.Println("Available commands:")
-	fmt.Println("  tree                Display certificate dependency tree")
-	fmt.Println("")
 	fmt.Println("Certificate operations:")
+	fmt.Println("  certificate tree    Display certificate dependency tree")
 	fmt.Println("  certificate import  Import certificate from file")
 	fmt.Println("  certificate export  Export certificate with human-readable content")
 	fmt.Println("  certificate delete  Delete certificate and its private key")
@@ -280,6 +276,8 @@ func (cli *CLI) runCertificateCommand(args []string) {
 
 	subcommand := args[0]
 	switch subcommand {
+	case "tree":
+		cli.runTreeCommand()
 	case "import":
 		cli.runCertificateImportCommand(args[1:])
 	case "export":
