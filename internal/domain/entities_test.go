@@ -1,0 +1,78 @@
+package domain
+
+import (
+	"encoding/pem"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+//go:generate bash ./generate_testdata.sh
+
+var unencryptedKeyFiles = []string{
+	"ecdh_key_pkcs8.pem",
+	"ecdsa_key_pkcs8.pem",
+	"ecdsa_key_sec1.pem",
+	"ed25519_key_pkcs8.pem",
+	"rsa_key_pkcs1.pem",
+	"rsa_key_pkcs8.pem",
+}
+
+var encryptedKeyFiles = []string{
+	//"ecdh_key_pkcs8_enc.pem",
+	//"ecdsa_key_pkcs8_enc.pem",
+	"ecdsa_key_sec1_enc.pem",
+	//"ed25519_key_pkcs8_enc.pem",
+	"rsa_key_pkcs1_enc.pem",
+	//"rsa_key_pkcs8_enc.pem",
+}
+
+func loadTestFile(t *testing.T, name string) *pem.Block {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", name, err)
+	}
+	block, _ := pem.Decode(data)
+	return block
+}
+
+func TestCertificateFromPEM(t *testing.T) {
+	certPEM := loadTestFile(t, "cert.pem")
+	if _, err := CertificateFromPEM(certPEM); err != nil {
+		t.Errorf("CertificateFromPEM failed: %v", err)
+	}
+}
+
+func TestUnencryptedKeyPairFromUnencryptedPEM(t *testing.T) {
+	for _, keyFile := range unencryptedKeyFiles {
+		t.Run(keyFile, func(t *testing.T) {
+			keyPEM := loadTestFile(t, keyFile)
+			if _, err := KeyPairFromUnencryptedPEM(keyPEM); err != nil {
+				t.Errorf("Unencrypted via KeyPairFromUnencryptedPEM failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestUnencryptedKeyPairFromPEM(t *testing.T) {
+	for _, keyFile := range unencryptedKeyFiles {
+		t.Run(keyFile, func(t *testing.T) {
+			keyPEM := loadTestFile(t, keyFile)
+			if _, err := KeyPairFromPEM(keyPEM, ""); err != nil {
+				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestEncryptedKeyPairFromPEM(t *testing.T) {
+	for _, keyFile := range encryptedKeyFiles {
+		t.Run(keyFile, func(t *testing.T) {
+			keyPEM := loadTestFile(t, keyFile)
+			if _, err := KeyPairFromPEM(keyPEM, "secret"); err != nil {
+				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			}
+		})
+	}
+}

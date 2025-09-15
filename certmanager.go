@@ -21,37 +21,6 @@ import (
 	"golang.org/x/term"
 )
 
-// Certificate represents a certificate with its metadata and relationships
-type Certificate struct {
-	SerialNumber string
-	Subject      string
-	Issuer       string
-	NotBefore    time.Time
-	NotAfter     time.Time
-	PEMData      string
-	KeyHash      string
-	IsSelfSigned bool
-	IsRoot       bool
-	IsCA         bool
-	X509Cert     *x509.Certificate
-	Children     []*Certificate
-}
-
-// KeyPair represents a private key with its hash
-type KeyPair struct {
-	PublicKeyHash string
-	PEMData       string
-}
-
-// DatabaseInterface defines the database operations needed by the certificate manager
-type DatabaseInterface interface {
-	QueryRow(query string, args ...any) *sql.Row
-	Query(query string, args ...any) (*sql.Rows, error)
-	Exec(query string, args ...any) (sql.Result, error)
-	Begin() (*sql.Tx, error)
-	Close() error
-}
-
 // PasswordReader interface for abstracting password input
 type PasswordReader interface {
 	ReadPassword(prompt string) (string, error)
@@ -86,7 +55,6 @@ func (w *DefaultFileWriter) WriteFile(filename string, data []byte, perm int) er
 
 // CertificateManager handles all certificate operations
 type CertificateManager struct {
-	db             DatabaseInterface
 	passwordReader PasswordReader
 	fileWriter     FileWriter
 }
@@ -108,78 +76,6 @@ func (cm *CertificateManager) SetPasswordReader(reader PasswordReader) {
 // SetFileWriter sets a custom file writer (useful for testing)
 func (cm *CertificateManager) SetFileWriter(writer FileWriter) {
 	cm.fileWriter = writer
-}
-
-// InitializeDatabase creates the necessary database tables
-func (cm *CertificateManager) InitializeDatabase() error {
-	// Create certificates table
-	_, err := cm.db.Exec(`
-		CREATE TABLE IF NOT EXISTS certificates (
-			serial_number TEXT PRIMARY KEY,
-			subject TEXT NOT NULL,
-			issuer TEXT NOT NULL,
-			not_before DATETIME NOT NULL,
-			not_after DATETIME NOT NULL,
-			pem_data TEXT NOT NULL,
-			key_hash TEXT,
-			expected_key_hash TEXT NOT NULL,
-			is_self_signed BOOLEAN NOT NULL,
-			is_root BOOLEAN NOT NULL,
-			is_ca BOOLEAN NOT NULL
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Create keys table
-	_, err = cm.db.Exec(`
-		CREATE TABLE IF NOT EXISTS keys (
-			public_key_hash TEXT PRIMARY KEY,
-			pem_data TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	return err
-}
-
-// ImportCertificate imports a certificate without a private key
-func (cm *CertificateManager) ImportCertificate(certPEM string) (*Certificate, error) {
-	cert, err := cm.parseCertificateFromPEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %v", err)
-	}
-
-	// Calculate expected key hash from certificate's public key
-	expectedKeyHash := cm.calculatePublicKeyHash(cert.X509Cert)
-
-	// Check if a matching key already exists
-	var existingKeyData string
-	err = cm.db.QueryRow("SELECT pem_data FROM keys WHERE public_key_hash = ?", expectedKeyHash).Scan(&existingKeyData)
-	hasMatchingKey := (err == nil)
-
-	// Store certificate with key_hash set only if a matching key exists
-	var keyHashForDB interface{}
-	if hasMatchingKey {
-		keyHashForDB = expectedKeyHash
-		cert.KeyHash = expectedKeyHash
-	} else {
-		keyHashForDB = nil
-		cert.KeyHash = "" // No key available
-	}
-
-	_, err = cm.db.Exec(`
-		INSERT OR REPLACE INTO certificates
-		(serial_number, subject, issuer, not_before, not_after,
-		 pem_data, key_hash, expected_key_hash, is_self_signed, is_root, is_ca)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, cert.SerialNumber, cert.Subject, cert.Issuer, cert.NotBefore, cert.NotAfter,
-		cert.PEMData, keyHashForDB, expectedKeyHash, cert.IsSelfSigned, cert.IsRoot, cert.IsCA)
-	if err != nil {
-		return nil, fmt.Errorf("failed to store certificate: %v", err)
-	}
-
-	return cert, nil
 }
 
 // GetCertificate retrieves a certificate by serial number
@@ -523,47 +419,6 @@ func (cm *CertificateManager) ImportKey(keyPEM string) (string, error) {
 	return keyHash, nil
 }
 
-// calculatePrivateKeyHash calculates the SHA256 hash of the public key derived from a private key
-func (cm *CertificateManager) calculatePrivateKeyHash(keyPEM string) (string, error) {
-	// Parse the private key (try without password first)
-	privateKey, err := cm.loadPrivateKeyFromPEM(keyPEM, "")
-	if err != nil {
-		// If decryption failed, it might be encrypted
-		block, _ := pem.Decode([]byte(keyPEM))
-		if block == nil {
-			return "", fmt.Errorf("failed to decode PEM block")
-		}
-
-		if x509.IsEncryptedPEMBlock(block) {
-			return "", fmt.Errorf("cannot calculate hash for encrypted private key without password")
-		}
-		return "", fmt.Errorf("failed to parse private key: %v", err)
-	}
-
-	// Extract public key from private key
-	var publicKey any
-	switch priv := privateKey.(type) {
-	case *rsa.PrivateKey:
-		publicKey = &priv.PublicKey
-	case *ecdsa.PrivateKey:
-		publicKey = &priv.PublicKey
-	case *dsa.PrivateKey:
-		publicKey = &priv.PublicKey
-	default:
-		return "", fmt.Errorf("unsupported private key type: %T", privateKey)
-	}
-
-	// Marshal the public key
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal public key: %v", err)
-	}
-
-	// Calculate SHA256 hash
-	hash := sha256.Sum256(publicKeyBytes)
-	return hex.EncodeToString(hash[:]), nil
-}
-
 // ImportKeyWithPassword imports an encrypted private key with the provided password
 func (cm *CertificateManager) ImportKeyWithPassword(keyPEM, password string) (string, error) {
 	// Parse the private key with password
@@ -702,38 +557,6 @@ func (cm *CertificateManager) CreateRootCA(req *CreateRootCARequest) (*Certifica
 
 // Helper methods
 
-func (cm *CertificateManager) calculatePublicKeyHash(cert *x509.Certificate) string {
-	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	return hex.EncodeToString(hash[:])
-}
-
-func (cm *CertificateManager) parseCertificateFromPEM(pemData string) (*Certificate, error) {
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("invalid certificate PEM data")
-	}
-
-	x509Cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-
-	cert := &Certificate{
-		SerialNumber: x509Cert.SerialNumber.String(),
-		Subject:      x509Cert.Subject.String(),
-		Issuer:       x509Cert.Issuer.String(),
-		NotBefore:    x509Cert.NotBefore,
-		NotAfter:     x509Cert.NotAfter,
-		PEMData:      pemData,
-		IsSelfSigned: x509Cert.Subject.String() == x509Cert.Issuer.String(),
-		IsRoot:       x509Cert.IsCA && x509Cert.Subject.String() == x509Cert.Issuer.String(),
-		IsCA:         x509Cert.IsCA,
-		X509Cert:     x509Cert,
-	}
-
-	return cert, nil
-}
-
 func (cm *CertificateManager) generateCertificateText(cert *Certificate) string {
 	var builder strings.Builder
 
@@ -768,38 +591,6 @@ func (cm *CertificateManager) sortCertificates(certificates []*Certificate) {
 	sort.Slice(certificates, func(i, j int) bool {
 		return certificates[i].Subject < certificates[j].Subject
 	})
-}
-
-func (cm *CertificateManager) loadPrivateKeyFromPEM(pemData, password string) (any, error) {
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
-	}
-
-	var keyBytes []byte
-	var err error
-
-	if x509.IsEncryptedPEMBlock(block) {
-		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		keyBytes = block.Bytes
-	}
-
-	// Try parsing as different key types
-	if key, err := x509.ParsePKCS1PrivateKey(keyBytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS8PrivateKey(keyBytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParseECPrivateKey(keyBytes); err == nil {
-		return key, nil
-	}
-
-	return nil, fmt.Errorf("failed to parse private key")
 }
 
 // validateKeyMatchesCertificate checks if a private key matches the certificate's public key
