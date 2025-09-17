@@ -16,17 +16,19 @@ import (
 
 // Certificate represents a certificate with its metadata and relationships
 type Certificate struct {
-	SerialNumber string
-	Subject      string
-	Issuer       string
-	NotBefore    time.Time
-	NotAfter     time.Time
-	PEMData      string
-	KeyHash      string
-	IsSelfSigned bool
-	IsRoot       bool
-	IsCA         bool
-	X509Cert     *x509.Certificate
+	ID                 int
+	SerialNumber       string
+	SubjectDN          string
+	IssuerDN           string
+	NotBefore          time.Time
+	NotAfter           time.Time
+	SignatureAlgorithm string
+	SubjectKeyID       string
+	AuthorityKeyID     string
+	IsCA               bool
+	PEMData            string
+	PublicKeyHash      string
+	x509Cert           *x509.Certificate
 }
 
 // CertificateFromPEM creates a Certificate instance from the given PEM block
@@ -41,20 +43,39 @@ func CertificateFromPEM(block *pem.Block) (*Certificate, error) {
 	}
 
 	cert := &Certificate{
-		SerialNumber: x509Cert.SerialNumber.String(),
-		Subject:      x509Cert.Subject.String(),
-		Issuer:       x509Cert.Issuer.String(),
-		NotBefore:    x509Cert.NotBefore,
-		NotAfter:     x509Cert.NotAfter,
-		PEMData:      string(pem.EncodeToMemory(block)),
-		KeyHash:      calculatePublicKeyHashFromX509Cert(x509Cert),
-		IsSelfSigned: x509Cert.Subject.String() == x509Cert.Issuer.String(),
-		IsRoot:       x509Cert.IsCA && x509Cert.Subject.String() == x509Cert.Issuer.String(),
-		IsCA:         x509Cert.IsCA,
-		X509Cert:     x509Cert,
+		ID:                 -1,
+		SerialNumber:       x509Cert.SerialNumber.String(),
+		SubjectDN:          x509Cert.Subject.String(),
+		IssuerDN:           x509Cert.Issuer.String(),
+		NotBefore:          x509Cert.NotBefore,
+		NotAfter:           x509Cert.NotAfter,
+		SignatureAlgorithm: x509Cert.SignatureAlgorithm.String(),
+		SubjectKeyID:       hex.EncodeToString(x509Cert.SubjectKeyId),
+		AuthorityKeyID:     hex.EncodeToString(x509Cert.AuthorityKeyId),
+		IsCA:               x509Cert.IsCA,
+		PEMData:            string(pem.EncodeToMemory(block)),
+		PublicKeyHash:      calculatePublicKeyHashFromX509Cert(x509Cert),
+		x509Cert:           x509Cert,
 	}
 
 	return cert, nil
+}
+
+func (c *Certificate) X509Cert() *x509.Certificate {
+	if c.x509Cert != nil {
+		block, _ := pem.Decode([]byte(c.PEMData))
+		x509Cert, _ := x509.ParseCertificate(block.Bytes)
+		c.x509Cert = x509Cert
+	}
+	return c.x509Cert
+}
+
+func (c *Certificate) IsSelfSigned() bool {
+	return c.X509Cert().Subject.String() == c.X509Cert().Issuer.String()
+}
+
+func (c *Certificate) IsRoot() bool {
+	return c.IsCA && c.IsSelfSigned()
 }
 
 func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
@@ -64,10 +85,11 @@ func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
 
 // KeyPair represents a private key with its hash
 type KeyPair struct {
-	PublicKeyHash    string
-	KeyAlgorithm     string
-	PrivateKeyLength int
-	PEMData          string
+	ID            int
+	PublicKeyHash string
+	KeyType       string
+	KeySize       int
+	PEMData       string
 }
 
 type privateKeyInfo struct {
@@ -91,10 +113,11 @@ func KeyPairFromUnencryptedPEM(block *pem.Block) (*KeyPair, error) {
 		return nil, err
 	}
 	return &KeyPair{
-		PublicKeyHash:    keyPair.PublicKeyHash,
-		KeyAlgorithm:     keyPair.KeyAlgorithm,
-		PrivateKeyLength: keyPair.PrivateKeyLength,
-		PEMData:          string(pem.EncodeToMemory(block)),
+		ID:            keyPair.ID,
+		PublicKeyHash: keyPair.PublicKeyHash,
+		KeyType:       keyPair.KeyType,
+		KeySize:       keyPair.KeySize,
+		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
 }
 
@@ -125,10 +148,11 @@ func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
 		return nil, err
 	}
 	return &KeyPair{
-		PublicKeyHash:    keyPair.PublicKeyHash,
-		KeyAlgorithm:     keyPair.KeyAlgorithm,
-		PrivateKeyLength: keyPair.PrivateKeyLength,
-		PEMData:          string(pem.EncodeToMemory(block)),
+		ID:            keyPair.ID,
+		PublicKeyHash: keyPair.PublicKeyHash,
+		KeyType:       keyPair.KeyType,
+		KeySize:       keyPair.KeySize,
+		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
 }
 
@@ -145,7 +169,7 @@ func keyPairFromPrivateKeyBytes(keyBytes []byte) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to calculate key hash: %v", err)
 	}
 
-	return &KeyPair{keyHash, privateKey.algorithm, privateKey.bitSize, ""}, nil
+	return &KeyPair{-1, keyHash, privateKey.algorithm, privateKey.bitSize, ""}, nil
 }
 
 func loadPrivateKeyFromPEM(keyBytes []byte) (privateKeyInfo, error) {
