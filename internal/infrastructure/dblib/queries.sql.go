@@ -265,3 +265,12 @@ func (q *Queries) KeyByPublicKeyHash(ctx context.Context, publicKeyHash string) 
 	)
 	return &i, err
 }
+
+const updateKeyPEM = `-- name: UpdateKeyPEM :exec
+UPDATE key SET pem_data = ? WHERE id = ?
+`
+
+func (q *Queries) UpdateKeyPEM(ctx context.Context, id int, pemData string) error {
+	_, err := q.db.ExecContext(ctx, updateKeyPEM, pemData, id)
+	return err
+}

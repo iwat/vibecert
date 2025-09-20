@@ -56,3 +56,6 @@ SELECT
     id, public_key_hash, key_type, key_size, pem_data
 FROM key
 WHERE public_key_hash = ?;
+
+-- name: UpdateKeyPEM :exec
+UPDATE key SET pem_data = ? WHERE id = ?;
