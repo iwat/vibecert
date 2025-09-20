@@ -27,6 +27,6 @@ openssl pkcs8 -topk8 -in testdata/ed25519_key_pkcs8.pem -passout pass:secret -ou
 openssl genpkey -algorithm X25519 -out testdata/ecdh_key_pkcs8.pem
 openssl pkcs8 -topk8 -in testdata/ecdh_key_pkcs8.pem -passout pass:secret -out testdata/ecdh_key_pkcs8_enc.pem
 
-# Self-signed certificate
-openssl req -x509 -newkey rsa:2048 -keyout /tmp/tmpkey.pem -out testdata/cert.pem \
-  -days 1 -nodes -subj "/CN=Test Cert"
+# Self-signed certificate with PEM encoding
+openssl req -x509 -newkey rsa:2048 -keyout testdata/rsa_cert_key.pem -out testdata/rsa_cert.crt \
+  -days 365 -nodes -subj "/CN=Test Certificate Authority/C=CA/O=Example Org"

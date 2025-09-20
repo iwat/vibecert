@@ -134,7 +134,6 @@ func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
 	var keyBytes []byte
 	var err error
 	if x509.IsEncryptedPEMBlock(block) {
-		fmt.Println("Decrypting PEM block")
 		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
 		if err != nil {
 			return nil, err

@@ -38,9 +38,17 @@ func loadTestFile(t *testing.T, name string) *pem.Block {
 }
 
 func TestCertificateFromPEM(t *testing.T) {
-	certPEM := loadTestFile(t, "cert.pem")
-	if _, err := CertificateFromPEM(certPEM); err != nil {
+	certPEM := loadTestFile(t, "rsa_cert.crt")
+	cert, err := CertificateFromPEM(certPEM)
+	if err != nil {
 		t.Errorf("CertificateFromPEM failed: %v", err)
+	}
+
+	keyPEM := loadTestFile(t, "rsa_cert_key.pem")
+	key, _ := KeyPairFromUnencryptedPEM(keyPEM)
+
+	if key.PublicKeyHash != cert.PublicKeyHash {
+		t.Fatalf("key.PublicKeyHash != cert.PublicKeyHash")
 	}
 }
 
