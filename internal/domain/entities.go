@@ -72,7 +72,7 @@ func (c *Certificate) X509Cert() *x509.Certificate {
 }
 
 func (c *Certificate) IsSelfSigned() bool {
-	return c.X509Cert().Subject.String() == c.X509Cert().Issuer.String()
+	return c.SubjectDN == c.IssuerDN
 }
 
 func (c *Certificate) IsRoot() bool {
