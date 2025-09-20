@@ -32,6 +32,13 @@ SELECT
 FROM certificate
 WHERE public_key_hash = ?;
 
+-- name: AllCertificates :many
+SELECT
+    id, serial_number, subject_dn, issuer_dn, not_before, not_after,
+    signature_algo, subject_key_id, authority_key_id,
+    is_ca, pem_data, public_key_hash
+FROM certificate;
+
 -- name: CreateKey :one
 INSERT OR REPLACE INTO key (
     public_key_hash, key_type, key_size, pem_data
