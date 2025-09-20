@@ -5,12 +5,14 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -105,10 +107,82 @@ type privateKey interface {
 	Equal(x crypto.PrivateKey) bool
 }
 
+var ErrEncryptedPrivateKey = errors.New("key is encrypted")
+
+// NewRSAKeyPair creates a new RSA key pair with the given key size and password
+func NewRSAKeyPair(keySize int, password string) (*KeyPair, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, keySize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	var keyPEM string
+	if password == "" {
+		keyPEM = string(pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+		}))
+	} else {
+		keyPEM, err = encryptPrivateKey(privateKey, password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt private key: %v", err)
+		}
+	}
+	publicKeyHash, err := calculatePublicKeyHash(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate public key hash: %v", err)
+	}
+
+	return &KeyPair{
+		PublicKeyHash: publicKeyHash,
+		KeyType:       "RSA",
+		KeySize:       keySize,
+		PEMData:       keyPEM,
+	}, nil
+}
+
+func NewECDSAKeyPair(curve elliptic.Curve, password string) (*KeyPair, error) {
+	privateKey, err := ecdsa.GenerateKey(curve, rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	var keyPEM string
+	if password == "" {
+		marshalledKey, err := x509.MarshalECPrivateKey(privateKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal private key: %v", err)
+		}
+		keyPEM = string(pem.EncodeToMemory(&pem.Block{
+			Type:  "EC PRIVATE KEY",
+			Bytes: marshalledKey,
+		}))
+	} else {
+		keyPEM, err = encryptPrivateKey(privateKey, password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt private key: %v", err)
+		}
+	}
+	publicKeyHash, err := calculatePublicKeyHash(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate public key hash: %v", err)
+	}
+
+	return &KeyPair{
+		PublicKeyHash: publicKeyHash,
+		KeyType:       "ECDSA/" + curve.Params().Name,
+		KeySize:       curve.Params().BitSize,
+		PEMData:       keyPEM,
+	}, nil
+}
+
 // KeyPairFromUnencryptedPEM creates a KeyPair instance from the given unencrypted PEM block
 func KeyPairFromUnencryptedPEM(block *pem.Block) (*KeyPair, error) {
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+	if x509.IsEncryptedPEMBlock(block) {
+		return nil, ErrEncryptedPrivateKey
 	}
 	keyPair, err := keyPairFromPrivateKeyBytes(block.Bytes)
 	if err != nil {
@@ -195,7 +269,7 @@ func (k *KeyPair) Block() *pem.Block {
 	return k.block
 }
 
-func encryptPrivateKey(privateKey any, password string) (string, error) {
+func encryptPrivateKey(privateKey privateKey, password string) (string, error) {
 	var keyBytes []byte
 	var err error
 

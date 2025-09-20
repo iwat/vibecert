@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"crypto/elliptic"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -104,5 +105,49 @@ func TestReencryptedKeyPairFromPEM(t *testing.T) {
 				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
 			}
 		})
+	}
+}
+
+func TestNewRSAKeyPair(t *testing.T) {
+	key, err := NewRSAKeyPair(2048, "")
+	if err != nil {
+		t.Errorf("NewRSAKeyPair failed: %v", err)
+	}
+	if key == nil {
+		t.Errorf("NewRSAKeyPair returned nil")
+	}
+
+	key, err = NewRSAKeyPair(2048, "secret")
+	if err != nil {
+		t.Errorf("NewRSAKeyPair (encrypted) failed: %v", err)
+	}
+	if key == nil {
+		t.Errorf("NewRSAKeyPair (encrypted) returned nil")
+	}
+
+	if !key.IsEncryptedWithPassword("secret") {
+		t.Errorf("KeyPair is not encrypted with password")
+	}
+}
+
+func TestNewECDSAKeyPair(t *testing.T) {
+	key, err := NewECDSAKeyPair(elliptic.P256(), "")
+	if err != nil {
+		t.Errorf("NewECDSAKeyPair failed: %v", err)
+	}
+	if key == nil {
+		t.Errorf("NewECDSAKeyPair returned nil")
+	}
+
+	key, err = NewECDSAKeyPair(elliptic.P256(), "secret")
+	if err != nil {
+		t.Errorf("NewECDSAKeyPair (encrypted) failed: %v", err)
+	}
+	if key == nil {
+		t.Errorf("NewECDSAKeyPair (encrypted) returned nil")
+	}
+
+	if !key.IsEncryptedWithPassword("secret") {
+		t.Errorf("KeyPair is not encrypted with password")
 	}
 }
