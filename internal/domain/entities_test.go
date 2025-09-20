@@ -84,3 +84,25 @@ func TestEncryptedKeyPairFromPEM(t *testing.T) {
 		})
 	}
 }
+
+func TestReencryptedKeyPairFromPEM(t *testing.T) {
+	for _, keyFile := range encryptedKeyFiles {
+		t.Run(keyFile, func(t *testing.T) {
+			keyPEM := loadTestFile(t, keyFile)
+			var keyPair *KeyPair
+			var err error
+			if keyPair, err = KeyPairFromPEM(keyPEM, "secret"); err != nil {
+				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			}
+			err = keyPair.Reencrypt("secret", "newsecret")
+			if err != nil {
+				t.Errorf("Reencryption failed: %v", err)
+			}
+
+			block, _ := pem.Decode([]byte(keyPair.PEMData))
+			if keyPair, err = KeyPairFromPEM(block, "newsecret"); err != nil {
+				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			}
+		})
+	}
+}

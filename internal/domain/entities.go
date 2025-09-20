@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -131,15 +132,9 @@ func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
 		return nil, fmt.Errorf("encrypted PKCS#8 is not supported")
 	}
 
-	var keyBytes []byte
-	var err error
-	if x509.IsEncryptedPEMBlock(block) {
-		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		keyBytes = block.Bytes
+	keyBytes, err := decryptPEM(block, password)
+	if err != nil {
+		return nil, err
 	}
 
 	keyPair, err := keyPairFromPrivateKeyBytes(keyBytes)
@@ -153,6 +148,68 @@ func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
 		KeySize:       keyPair.KeySize,
 		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
+}
+
+// Reencrypt changes the password of a private key
+func (k *KeyPair) Reencrypt(currentPassword, newPassword string) error {
+	block, _ := pem.Decode([]byte(k.PEMData))
+
+	keyBytes, err := decryptPEM(block, currentPassword)
+	if err != nil {
+		return err
+	}
+
+	privateKeyInfo, err := loadPrivateKeyFromPEM(keyBytes)
+	if err != nil {
+		return fmt.Errorf("failed to decode private key: %v", err)
+	}
+
+	newKeyData, err := encryptPrivateKey(privateKeyInfo.privateKey, newPassword)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt private key with new password: %v", err)
+	}
+
+	k.PEMData = newKeyData
+	return nil
+}
+
+func encryptPrivateKey(privateKey any, password string) (string, error) {
+	var keyBytes []byte
+	var err error
+
+	switch key := privateKey.(type) {
+	case *rsa.PrivateKey:
+		keyBytes = x509.MarshalPKCS1PrivateKey(key)
+	case *ecdsa.PrivateKey:
+		keyBytes, err = x509.MarshalECPrivateKey(key)
+	default:
+		keyBytes, err = x509.MarshalPKCS8PrivateKey(key)
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	encryptedBlock, err := x509.EncryptPEMBlock(rand.Reader, "PRIVATE KEY", keyBytes, []byte(password), x509.PEMCipherAES256)
+	if err != nil {
+		return "", err
+	}
+
+	return string(pem.EncodeToMemory(encryptedBlock)), nil
+}
+
+func decryptPEM(block *pem.Block, password string) ([]byte, error) {
+	var keyBytes []byte
+	var err error
+	if x509.IsEncryptedPEMBlock(block) {
+		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		keyBytes = block.Bytes
+	}
+	return keyBytes, nil
 }
 
 // keyPairFromPrivateKeyBytes creates an incomplete KeyPair instance from the given private key bytes.
