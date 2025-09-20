@@ -12,7 +12,7 @@ import (
 )
 
 func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
-	km, db, err := createTestKeyManager()
+	km, db, passwordReader, err := createTestKeyManager()
 	if err != nil {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
@@ -33,9 +33,10 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 		t.Fatalf("Failed to create key pair: %v", err)
 	}
 
-	err = km.ReencryptPrivateKey(keyPair.ID, "", "secret")
+	passwordReader.passwords = []string{"secret", "secret"}
+	err = km.ReencryptPrivateKey(keyPair.ID)
 	if err != nil {
-		t.Errorf("Failed to reencrypt private key: %v", err)
+		t.Errorf("Failed to encrypt private key: %v", err)
 	}
 
 	keyPair, err = db.KeyByID(t.Context(), keyPair.ID)
@@ -48,20 +49,23 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 		t.Errorf("Expected encrypted PEM block, got %v", block.Type)
 	}
 
-	err = km.ReencryptPrivateKey(keyPair.ID, "secret", "newsecret")
+	passwordReader.passwords = []string{"secret", "newsecret", "newsecret"}
+	err = km.ReencryptPrivateKey(keyPair.ID)
 	if err != nil {
 		t.Errorf("Failed to reencrypt private key: %v", err)
 	}
 }
 
 // Test helper to create test key manager with real database
-func createTestKeyManager() (*KeyManager, *dblib.Queries, error) {
+func createTestKeyManager() (*KeyManager, *dblib.Queries, *MockPasswordReader, error) {
 	db, err := createTestDatabase()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return NewKeyManager(db), db, nil
+	passwordReader := NewMockPasswordReader()
+
+	return NewKeyManager(db, passwordReader), db, passwordReader, nil
 }
 
 // Generate a valid test key pair

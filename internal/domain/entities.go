@@ -91,6 +91,7 @@ type KeyPair struct {
 	KeyType       string
 	KeySize       int
 	PEMData       string
+	block         *pem.Block
 }
 
 type privateKeyInfo struct {
@@ -173,6 +174,27 @@ func (k *KeyPair) Reencrypt(currentPassword, newPassword string) error {
 	return nil
 }
 
+func (k *KeyPair) IsEncrypted() bool {
+	return x509.IsEncryptedPEMBlock(k.Block())
+}
+
+func (k *KeyPair) IsEncryptedWithPassword(password string) bool {
+	if !k.IsEncrypted() {
+		return false
+	}
+
+	_, err := x509.DecryptPEMBlock(k.Block(), []byte(password))
+	return err == nil
+}
+
+func (k *KeyPair) Block() *pem.Block {
+	if k.block == nil {
+		block, _ := pem.Decode([]byte(k.PEMData))
+		k.block = block
+	}
+	return k.block
+}
+
 func encryptPrivateKey(privateKey any, password string) (string, error) {
 	var keyBytes []byte
 	var err error
@@ -225,7 +247,7 @@ func keyPairFromPrivateKeyBytes(keyBytes []byte) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to calculate key hash: %v", err)
 	}
 
-	return &KeyPair{-1, keyHash, privateKey.algorithm, privateKey.bitSize, ""}, nil
+	return &KeyPair{-1, keyHash, privateKey.algorithm, privateKey.bitSize, "", nil}, nil
 }
 
 func loadPrivateKeyFromPEM(keyBytes []byte) (privateKeyInfo, error) {

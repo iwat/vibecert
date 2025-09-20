@@ -7,28 +7,57 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
+	"golang.org/x/term"
 )
 
 // KeyManager handles all certificate operations
 type KeyManager struct {
-	db *dblib.Queries
+	db             *dblib.Queries
+	passwordReader PasswordReader
 }
 
 // NewKeyManager creates a new key manager
-func NewKeyManager(db *dblib.Queries) *KeyManager {
+func NewKeyManager(db *dblib.Queries, passwordReader PasswordReader) *KeyManager {
 	return &KeyManager{
-		db: db,
+		db:             db,
+		passwordReader: passwordReader,
 	}
 }
 
 // ReencryptPrivateKey changes the password of the specified private key
-func (km *KeyManager) ReencryptPrivateKey(id int, currentPassword, newPassword string) error {
+func (km *KeyManager) ReencryptPrivateKey(id int) error {
 	key, err := km.db.KeyByID(context.TODO(), id)
 	if err != nil {
 		return fmt.Errorf("failed to load private key: %v", err)
+	}
+
+	var currentPassword string
+	if key.IsEncrypted() {
+		for {
+			currentPassword, err = km.passwordReader.ReadPassword("Enter current password: ")
+			if err != nil {
+				return fmt.Errorf("failed to read current password: %v", err)
+			}
+			if key.IsEncryptedWithPassword(currentPassword) {
+				break
+			}
+		}
+	}
+
+	newPassword, err := km.passwordReader.ReadPassword("Enter new password: ")
+	if err != nil {
+		return fmt.Errorf("failed to read new password: %v", err)
+	}
+	newPassword2, err := km.passwordReader.ReadPassword("Re-enter new password: ")
+	if err != nil {
+		return fmt.Errorf("failed to read new password: %v", err)
+	}
+	if newPassword != newPassword2 {
+		return errors.New("passwords do not match")
 	}
 
 	err = key.Reencrypt(currentPassword, newPassword)
@@ -67,4 +96,22 @@ func (cm *CertificateManager) encryptPrivateKey(privateKey any, password string)
 	}
 
 	return string(pem.EncodeToMemory(encryptedBlock)), nil
+}
+
+// PasswordReader interface for abstracting password input
+type PasswordReader interface {
+	ReadPassword(prompt string) (string, error)
+}
+
+// DefaultPasswordReader implements PasswordReader using terminal input
+type DefaultPasswordReader struct{}
+
+func (r *DefaultPasswordReader) ReadPassword(prompt string) (string, error) {
+	fmt.Print(prompt)
+	passwordBytes, err := term.ReadPassword(0)
+	if err != nil {
+		return "", err
+	}
+	fmt.Println()
+	return string(passwordBytes), nil
 }
