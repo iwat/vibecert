@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -81,6 +82,38 @@ func (c *Certificate) IsRoot() bool {
 	return c.IsCA && c.IsSelfSigned()
 }
 
+// GenerateText generates a openssl "-text" representation of the certificate.
+func (c *Certificate) Text() string {
+	cert := c.X509Cert()
+	var builder strings.Builder
+
+	builder.WriteString("Certificate:\n")
+	builder.WriteString("    Data:\n")
+	builder.WriteString(fmt.Sprintf("        Version: %d\n", cert.Version))
+	builder.WriteString(fmt.Sprintf("        Serial Number: %s\n", cert.SerialNumber))
+	builder.WriteString("    Signature Algorithm: " + cert.SignatureAlgorithm.String() + "\n")
+	builder.WriteString("        Issuer: " + cert.Issuer.String() + "\n")
+	builder.WriteString("        Validity:\n")
+	builder.WriteString(fmt.Sprintf("            Not Before: %s\n", cert.NotBefore.Format("Jan 2 15:04:05 2006 MST")))
+	builder.WriteString(fmt.Sprintf("            Not After:  %s\n", cert.NotAfter.Format("Jan 2 15:04:05 2006 MST")))
+	builder.WriteString("        Subject: " + cert.Subject.String() + "\n")
+
+	if cert.IsCA {
+		builder.WriteString("        CA: TRUE\n")
+	}
+
+	if len(cert.DNSNames) > 0 {
+		builder.WriteString("        Subject Alternative Name:\n")
+		for _, dns := range cert.DNSNames {
+			builder.WriteString(fmt.Sprintf("            DNS:%s\n", dns))
+		}
+	}
+
+	builder.WriteString("\n" + c.PEMData)
+
+	return builder.String()
+}
+
 func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
 	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 	return hex.EncodeToString(hash[:])
@@ -97,12 +130,12 @@ type KeyPair struct {
 }
 
 type privateKeyInfo struct {
-	privateKey privateKey
+	privateKey PrivateKey
 	algorithm  string
 	bitSize    int
 }
 
-type privateKey interface {
+type PrivateKey interface {
 	Public() crypto.PublicKey
 	Equal(x crypto.PrivateKey) bool
 }
@@ -227,21 +260,30 @@ func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
 	}, nil
 }
 
-// Reencrypt changes the password of a private key
-func (k *KeyPair) Reencrypt(currentPassword, newPassword string) error {
+func (k *KeyPair) PrivateKey(password string) (PrivateKey, error) {
 	block, _ := pem.Decode([]byte(k.PEMData))
 
-	keyBytes, err := decryptPEM(block, currentPassword)
+	keyBytes, err := decryptPEM(block, password)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	privateKeyInfo, err := loadPrivateKeyFromPEM(keyBytes)
 	if err != nil {
-		return fmt.Errorf("failed to decode private key: %v", err)
+		return nil, fmt.Errorf("failed to decode private key: %v", err)
 	}
 
-	newKeyData, err := encryptPrivateKey(privateKeyInfo.privateKey, newPassword)
+	return privateKeyInfo.privateKey, nil
+}
+
+// Reencrypt changes the password of a private key
+func (k *KeyPair) Reencrypt(currentPassword, newPassword string) error {
+	privateKey, err := k.PrivateKey(currentPassword)
+	if err != nil {
+		return err
+	}
+
+	newKeyData, err := encryptPrivateKey(privateKey, newPassword)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt private key with new password: %v", err)
 	}
@@ -271,7 +313,7 @@ func (k *KeyPair) Block() *pem.Block {
 	return k.block
 }
 
-func encryptPrivateKey(privateKey privateKey, password string) (string, error) {
+func encryptPrivateKey(privateKey PrivateKey, password string) (string, error) {
 	var keyBytes []byte
 	var err error
 
@@ -351,7 +393,7 @@ func loadPrivateKeyFromPEM(keyBytes []byte) (privateKeyInfo, error) {
 	return privateKeyInfo{}, fmt.Errorf("failed to parse private key")
 }
 
-func calculatePublicKeyHash(privateKey privateKey) (string, error) {
+func calculatePublicKeyHash(privateKey PrivateKey) (string, error) {
 	publicKeyBytes, err := x509.MarshalPKIXPublicKey(privateKey.Public())
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal public key: %v", err)

@@ -7,7 +7,7 @@ import (
 )
 
 func TestCertificateManager_BuildCertificateTree(t *testing.T) {
-	cm, err := createTestCertificateManager()
+	app, _, _, _, err := createTestApp()
 	if err != nil {
 		t.Fatalf("Failed to create test certificate manager: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCertificateManager_BuildCertificateTree(t *testing.T) {
 	certificates := []*domain.Certificate{rootCert, intermediateCert, leafCert, orphanCert}
 
 	// Build tree
-	tree := cm.BuildCertificateTree(certificates)
+	tree := app.BuildCertificateTree(certificates)
 
 	// Verify tree structure
 	if len(tree) != 2 { // Root cert and orphan cert should be roots
@@ -82,14 +82,4 @@ func TestCertificateManager_BuildCertificateTree(t *testing.T) {
 	if intermediate.Children[0].Certificate.SerialNumber != "leaf789" {
 		t.Errorf("Expected leaf as child of intermediate")
 	}
-}
-
-// Test helper to create test certificate manager with real database
-func createTestCertificateManager() (*CertificateManager, error) {
-	db, err := createTestDatabase()
-	if err != nil {
-		return nil, err
-	}
-
-	return NewCertificateManager(db), nil
 }

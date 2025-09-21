@@ -7,11 +7,38 @@ import (
 	"testing"
 
 	"github.com/iwat/vibecert/internal/domain"
-	"github.com/iwat/vibecert/internal/infrastructure/dblib"
 )
 
+func TestKeyManager_ImportKey(t *testing.T) {
+	app, _, passwordReader, fileReader, err := createTestApp()
+	if err != nil {
+		t.Fatalf("Failed to create test key manager: %v", err)
+	}
+
+	keyPair, err := domain.NewRSAKeyPair(2048, "")
+	if err != nil {
+		t.Fatalf("Failed to generate test key: %v", err)
+	}
+	fileReader.files["test.pem"] = []byte(keyPair.PEMData)
+	err = app.ImportKey("test.pem")
+	if err != nil {
+		t.Errorf("Failed to import key: %v", err)
+	}
+
+	keyPair2, err := domain.NewRSAKeyPair(2048, "secret")
+	if err != nil {
+		t.Fatalf("Failed to generate encrypted test key: %v", err)
+	}
+	fileReader.files["test2.pem"] = []byte(keyPair2.PEMData)
+	passwordReader.passwords = []string{"secret"}
+	err = app.ImportKey("test2.pem")
+	if err != nil {
+		t.Errorf("Failed to import key: %v", err)
+	}
+}
+
 func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
-	km, db, passwordReader, _, err := createTestKeyManager()
+	app, db, passwordReader, _, err := createTestApp()
 	if err != nil {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
@@ -27,7 +54,7 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "secret"}
-	err = km.ReencryptPrivateKey(keyPair.ID)
+	err = app.ReencryptPrivateKey(keyPair.ID)
 	if err != nil {
 		t.Fatalf("Failed to encrypt private key: %v", err)
 	}
@@ -43,49 +70,8 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "newsecret", "newsecret"}
-	err = km.ReencryptPrivateKey(keyPair.ID)
+	err = app.ReencryptPrivateKey(keyPair.ID)
 	if err != nil {
 		t.Fatalf("Failed to reencrypt private key: %v", err)
 	}
-}
-
-func TestKeyManager_ImportKey(t *testing.T) {
-	km, _, passwordReader, fileReader, err := createTestKeyManager()
-	if err != nil {
-		t.Fatalf("Failed to create test key manager: %v", err)
-	}
-
-	keyPair, err := domain.NewRSAKeyPair(2048, "")
-	if err != nil {
-		t.Fatalf("Failed to generate test key: %v", err)
-	}
-	fileReader.files["test.pem"] = []byte(keyPair.PEMData)
-	err = km.ImportKey("test.pem")
-	if err != nil {
-		t.Errorf("Failed to import key: %v", err)
-	}
-
-	keyPair2, err := domain.NewRSAKeyPair(2048, "secret")
-	if err != nil {
-		t.Fatalf("Failed to generate encrypted test key: %v", err)
-	}
-	fileReader.files["test2.pem"] = []byte(keyPair2.PEMData)
-	passwordReader.passwords = []string{"secret"}
-	err = km.ImportKey("test2.pem")
-	if err != nil {
-		t.Errorf("Failed to import key: %v", err)
-	}
-}
-
-// Test helper to create test key manager with real database
-func createTestKeyManager() (*KeyManager, *dblib.Queries, *MockPasswordReader, *MockFileReader, error) {
-	db, err := createTestDatabase()
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	passwordReader := NewMockPasswordReader()
-	fileReader := NewMockFileReader()
-
-	return NewKeyManager(db, passwordReader, fileReader), db, passwordReader, fileReader, nil
 }

@@ -11,6 +11,42 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+func TestCreateRootCA(t *testing.T) {
+	app, _, _, _, err := createTestApp()
+	if err != nil {
+		t.Fatalf("Failed to create test app: %v", err)
+	}
+
+	cert, keyPair, err := app.CreateRootCA(&CreateRootCARequest{
+		CommonName: "test",
+		KeySize:    2048,
+		ValidDays:  3650,
+		Password:   "secret",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create root CA: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("Root CA should not be nil")
+	}
+	if keyPair == nil {
+		t.Fatal("Root CA key pair should not be nil")
+	}
+}
+
+// Test helper to create test key manager with real database
+func createTestApp() (*App, *dblib.Queries, *MockPasswordReader, *MockFileReader, error) {
+	db, err := createTestDatabase()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	passwordReader := NewMockPasswordReader()
+	fileReader := NewMockFileReader()
+
+	return NewApp(db, passwordReader, fileReader), db, passwordReader, fileReader, nil
+}
+
 // Test helper to create in-memory SQLite database
 func createTestDatabase() (*dblib.Queries, error) {
 	db, err := sql.Open("sqlite3", ":memory:")

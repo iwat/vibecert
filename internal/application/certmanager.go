@@ -4,20 +4,7 @@ import (
 	"sort"
 
 	"github.com/iwat/vibecert/internal/domain"
-	"github.com/iwat/vibecert/internal/infrastructure/dblib"
 )
-
-// CertificateManager handles all certificate operations
-type CertificateManager struct {
-	db *dblib.Queries
-}
-
-// NewCertificateManager creates a new certificate manager
-func NewCertificateManager(db *dblib.Queries) *CertificateManager {
-	return &CertificateManager{
-		db: db,
-	}
-}
 
 type CertificateNode struct {
 	Certificate *domain.Certificate
@@ -25,7 +12,7 @@ type CertificateNode struct {
 }
 
 // BuildCertificateTree builds a hierarchical tree of certificates
-func (cm *CertificateManager) BuildCertificateTree(certificates []*domain.Certificate) []*CertificateNode {
+func (app *App) BuildCertificateTree(certificates []*domain.Certificate) []*CertificateNode {
 	var nodes []*CertificateNode
 	for _, cert := range certificates {
 		nodes = append(nodes, &CertificateNode{cert, nil})
