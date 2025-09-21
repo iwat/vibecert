@@ -6,7 +6,7 @@ INSERT INTO certificate (
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
-RETURNING *;
+RETURNING id;
 
 -- name: CertificateByID :one
 SELECT
@@ -43,7 +43,7 @@ FROM certificate;
 INSERT OR REPLACE INTO key (
     public_key_hash, key_type, key_size, pem_data
 ) VALUES (?, ?, ?, ?)
-RETURNING *;
+RETURNING id;
 
 -- name: KeyByID :one
 SELECT

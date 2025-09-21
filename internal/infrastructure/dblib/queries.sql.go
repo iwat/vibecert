@@ -166,7 +166,7 @@ INSERT INTO certificate (
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
-RETURNING id, serial_number, subject_dn, issuer_dn, not_before, not_after, signature_algo, subject_key_id, authority_key_id, is_ca, pem_data, public_key_hash
+RETURNING id
 `
 
 func (q *Queries) CreateCertificate(ctx context.Context, arg *domain.Certificate) (*domain.Certificate, error) {
@@ -183,29 +183,19 @@ func (q *Queries) CreateCertificate(ctx context.Context, arg *domain.Certificate
 		arg.PEMData,
 		arg.PublicKeyHash,
 	)
-	var i domain.Certificate
-	err := row.Scan(
-		&i.ID,
-		&i.SerialNumber,
-		&i.SubjectDN,
-		&i.IssuerDN,
-		&i.NotBefore,
-		&i.NotAfter,
-		&i.SignatureAlgorithm,
-		&i.SubjectKeyID,
-		&i.AuthorityKeyID,
-		&i.IsCA,
-		&i.PEMData,
-		&i.PublicKeyHash,
-	)
-	return &i, err
+	var id int
+	if err := row.Scan(&id); err != nil {
+		return nil, err
+	}
+	arg.ID = id
+	return arg, nil
 }
 
 const createKey = `-- name: CreateKey :one
 INSERT OR REPLACE INTO key (
     public_key_hash, key_type, key_size, pem_data
 ) VALUES (?, ?, ?, ?)
-RETURNING id, public_key_hash, key_type, key_size, pem_data
+RETURNING id
 `
 
 func (q *Queries) CreateKey(ctx context.Context, arg *domain.KeyPair) (*domain.KeyPair, error) {
@@ -215,15 +205,12 @@ func (q *Queries) CreateKey(ctx context.Context, arg *domain.KeyPair) (*domain.K
 		arg.KeySize,
 		arg.PEMData,
 	)
-	var i domain.KeyPair
-	err := row.Scan(
-		&i.ID,
-		&i.PublicKeyHash,
-		&i.KeyType,
-		&i.KeySize,
-		&i.PEMData,
-	)
-	return &i, err
+	var id int
+	if err := row.Scan(&id); err != nil {
+		return nil, err
+	}
+	arg.ID = id
+	return arg, nil
 }
 
 const keyByID = `-- name: KeyByID :one

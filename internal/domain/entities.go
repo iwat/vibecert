@@ -134,6 +134,7 @@ func NewRSAKeyPair(keySize int, password string) (*KeyPair, error) {
 	}
 
 	return &KeyPair{
+		ID:            -1,
 		PublicKeyHash: publicKeyHash,
 		KeyType:       "RSA",
 		KeySize:       keySize,
@@ -169,6 +170,7 @@ func NewECDSAKeyPair(curve elliptic.Curve, password string) (*KeyPair, error) {
 	}
 
 	return &KeyPair{
+		ID:            -1,
 		PublicKeyHash: publicKeyHash,
 		KeyType:       "ECDSA/" + curve.Params().Name,
 		KeySize:       curve.Params().BitSize,

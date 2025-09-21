@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/iwat/vibecert/internal/domain"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
 	"golang.org/x/term"
 )
@@ -18,14 +19,49 @@ import (
 type KeyManager struct {
 	db             *dblib.Queries
 	passwordReader PasswordReader
+	fileReader     FileReader
 }
 
 // NewKeyManager creates a new key manager
-func NewKeyManager(db *dblib.Queries, passwordReader PasswordReader) *KeyManager {
+func NewKeyManager(db *dblib.Queries, passwordReader PasswordReader, fileReader FileReader) *KeyManager {
 	return &KeyManager{
 		db:             db,
 		passwordReader: passwordReader,
+		fileReader:     fileReader,
 	}
+}
+
+// ImportKey imports a private key, calculating its hash from the key itself
+func (km *KeyManager) ImportKey(filename string) error {
+	pemBytes, err := km.fileReader.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("failed to read private key file: %v", err)
+	}
+
+	for {
+		var block *pem.Block
+		block, pemBytes = pem.Decode(pemBytes)
+		if block == nil {
+			break
+		}
+
+		keyPair, err := domain.KeyPairFromUnencryptedPEM(block)
+		if err == domain.ErrEncryptedPrivateKey {
+			currentPassword, err := km.passwordReader.ReadPassword("Entry current password: ")
+			if err != nil {
+				return fmt.Errorf("failed to read password: %v", err)
+			}
+			keyPair, err = domain.KeyPairFromPEM(block, currentPassword)
+			if err != nil {
+				return fmt.Errorf("failed to decrypt private key: %v", err)
+			}
+		}
+		_, err = km.db.CreateKey(context.TODO(), keyPair)
+		if err != nil {
+			return fmt.Errorf("failed to create key: %v", err)
+		}
+	}
+	return nil
 }
 
 // ReencryptPrivateKey changes the password of the specified private key
