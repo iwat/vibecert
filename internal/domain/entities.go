@@ -143,14 +143,14 @@ type PrivateKey interface {
 var ErrEncryptedPrivateKey = errors.New("key is encrypted")
 
 // NewRSAKeyPair creates a new RSA key pair with the given key size and password
-func NewRSAKeyPair(keySize int, password string) (*KeyPair, error) {
+func NewRSAKeyPair(keySize int, password []byte) (*KeyPair, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, keySize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
 
 	var keyPEM string
-	if password == "" {
+	if len(password) == 0 {
 		keyPEM = string(pem.EncodeToMemory(&pem.Block{
 			Type:  "RSA PRIVATE KEY",
 			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
@@ -175,14 +175,14 @@ func NewRSAKeyPair(keySize int, password string) (*KeyPair, error) {
 	}, nil
 }
 
-func NewECDSAKeyPair(curve elliptic.Curve, password string) (*KeyPair, error) {
+func NewECDSAKeyPair(curve elliptic.Curve, password []byte) (*KeyPair, error) {
 	privateKey, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
 
 	var keyPEM string
-	if password == "" {
+	if len(password) == 0 {
 		marshalledKey, err := x509.MarshalECPrivateKey(privateKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal private key: %v", err)
@@ -233,7 +233,7 @@ func KeyPairFromUnencryptedPEM(block *pem.Block) (*KeyPair, error) {
 }
 
 // KeyPairFromPEM creates a KeyPair instance from the given encrypted PEM block with the specified password
-func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
+func KeyPairFromPEM(block *pem.Block, password []byte) (*KeyPair, error) {
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
 	}
@@ -260,7 +260,7 @@ func KeyPairFromPEM(block *pem.Block, password string) (*KeyPair, error) {
 	}, nil
 }
 
-func (k *KeyPair) PrivateKey(password string) (PrivateKey, error) {
+func (k *KeyPair) Decrypt(password []byte) (PrivateKey, error) {
 	block, _ := pem.Decode([]byte(k.PEMData))
 
 	keyBytes, err := decryptPEM(block, password)
@@ -277,8 +277,8 @@ func (k *KeyPair) PrivateKey(password string) (PrivateKey, error) {
 }
 
 // Reencrypt changes the password of a private key
-func (k *KeyPair) Reencrypt(currentPassword, newPassword string) error {
-	privateKey, err := k.PrivateKey(currentPassword)
+func (k *KeyPair) Reencrypt(currentPassword, newPassword []byte) error {
+	privateKey, err := k.Decrypt(currentPassword)
 	if err != nil {
 		return err
 	}
@@ -296,15 +296,6 @@ func (k *KeyPair) IsEncrypted() bool {
 	return x509.IsEncryptedPEMBlock(k.Block())
 }
 
-func (k *KeyPair) IsEncryptedWithPassword(password string) bool {
-	if !k.IsEncrypted() {
-		return false
-	}
-
-	_, err := x509.DecryptPEMBlock(k.Block(), []byte(password))
-	return err == nil
-}
-
 func (k *KeyPair) Block() *pem.Block {
 	if k.block == nil {
 		block, _ := pem.Decode([]byte(k.PEMData))
@@ -313,7 +304,7 @@ func (k *KeyPair) Block() *pem.Block {
 	return k.block
 }
 
-func encryptPrivateKey(privateKey PrivateKey, password string) (string, error) {
+func encryptPrivateKey(privateKey PrivateKey, password []byte) (string, error) {
 	var keyBytes []byte
 	var err error
 
@@ -338,11 +329,11 @@ func encryptPrivateKey(privateKey PrivateKey, password string) (string, error) {
 	return string(pem.EncodeToMemory(encryptedBlock)), nil
 }
 
-func decryptPEM(block *pem.Block, password string) ([]byte, error) {
+func decryptPEM(block *pem.Block, password []byte) ([]byte, error) {
 	var keyBytes []byte
 	var err error
 	if x509.IsEncryptedPEMBlock(block) {
-		keyBytes, err = x509.DecryptPEMBlock(block, []byte(password))
+		keyBytes, err = x509.DecryptPEMBlock(block, password)
 		if err != nil {
 			return nil, err
 		}

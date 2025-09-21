@@ -15,7 +15,7 @@ func TestKeyManager_ImportKey(t *testing.T) {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
 
-	keyPair, err := domain.NewRSAKeyPair(2048, "")
+	keyPair, err := domain.NewRSAKeyPair(2048, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestKeyManager_ImportKey(t *testing.T) {
 		t.Errorf("Failed to import key: %v", err)
 	}
 
-	keyPair2, err := domain.NewRSAKeyPair(2048, "secret")
+	keyPair2, err := domain.NewRSAKeyPair(2048, []byte("secret"))
 	if err != nil {
 		t.Fatalf("Failed to generate encrypted test key: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
 
-	keyPair, err := domain.NewECDSAKeyPair(elliptic.P256(), "")
+	keyPair, err := domain.NewECDSAKeyPair(elliptic.P256(), nil)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}

@@ -18,9 +18,10 @@ CREATE TABLE IF NOT EXISTS certificate (
 	is_ca INTEGER NOT NULL,
 	pem_data TEXT NOT NULL,
 	public_key_hash TEXT NOT NULL,
-	UNIQUE(issuer_dn, serial_number),
-	UNIQUE(public_key_hash)
+	UNIQUE(issuer_dn, serial_number)
 );
+
+CREATE INDEX idx_certificate_public_key_hash ON certificate (public_key_hash);
 
 CREATE TABLE IF NOT EXISTS key (
 	id INTEGER PRIMARY KEY,

@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"encoding/pem"
 	"errors"
@@ -49,14 +50,15 @@ func (app *App) ReencryptPrivateKey(id int) error {
 		return fmt.Errorf("failed to load private key: %v", err)
 	}
 
-	var currentPassword string
+	var currentPassword []byte
 	if key.IsEncrypted() {
 		for {
 			currentPassword, err = app.passwordReader.ReadPassword("Enter current password: ")
 			if err != nil {
 				return fmt.Errorf("failed to read current password: %v", err)
 			}
-			if key.IsEncryptedWithPassword(currentPassword) {
+			_, err = key.Decrypt(currentPassword)
+			if err == nil {
 				break
 			}
 		}
@@ -70,7 +72,7 @@ func (app *App) ReencryptPrivateKey(id int) error {
 	if err != nil {
 		return fmt.Errorf("failed to read new password: %v", err)
 	}
-	if newPassword != newPassword2 {
+	if !bytes.Equal(newPassword, newPassword2) {
 		return errors.New("passwords do not match")
 	}
 

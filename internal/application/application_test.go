@@ -12,16 +12,17 @@ import (
 )
 
 func TestCreateRootCA(t *testing.T) {
-	app, _, _, _, err := createTestApp()
+	app, _, passwordReader, _, err := createTestApp()
 	if err != nil {
 		t.Fatalf("Failed to create test app: %v", err)
 	}
 
-	cert, keyPair, err := app.CreateRootCA(&CreateRootCARequest{
+	passwordReader.passwords = []string{"secret", "secret"}
+	cert, keyPair, err := app.CreateCA(&CreateCARequest{
+		IssuerCA:   nil,
 		CommonName: "test",
 		KeySize:    2048,
 		ValidDays:  3650,
-		Password:   "secret",
 	})
 	if err != nil {
 		t.Fatalf("Failed to create root CA: %v", err)
@@ -31,6 +32,38 @@ func TestCreateRootCA(t *testing.T) {
 	}
 	if keyPair == nil {
 		t.Fatal("Root CA key pair should not be nil")
+	}
+}
+
+func TestCreateIntermediateCA(t *testing.T) {
+	app, _, passwordReader, _, err := createTestApp()
+	if err != nil {
+		t.Fatalf("Failed to create test app: %v", err)
+	}
+
+	passwordReader.passwords = []string{"root-secret", "root-secret"}
+	rootCert, _, err := app.CreateCA(&CreateCARequest{
+		IssuerCA:   nil,
+		CommonName: "test root",
+		KeySize:    2048,
+		ValidDays:  3650,
+	})
+
+	passwordReader.passwords = []string{"root-secret", "intermediate-secret", "intermediate-secret"}
+	cert, keyPair, err := app.CreateCA(&CreateCARequest{
+		IssuerCA:   rootCert,
+		CommonName: "test intermediate",
+		KeySize:    2048,
+		ValidDays:  3650,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create intermediate CA: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("Intermediate CA should not be nil")
+	}
+	if keyPair == nil {
+		t.Fatal("Intermediate CA key pair should not be nil")
 	}
 }
 
@@ -68,13 +101,13 @@ func NewMockPasswordReader(passwords ...string) *MockPasswordReader {
 	}
 }
 
-func (r *MockPasswordReader) ReadPassword(prompt string) (string, error) {
+func (r *MockPasswordReader) ReadPassword(prompt string) ([]byte, error) {
 	if len(r.passwords) == 0 {
-		return "", fmt.Errorf("no more mock passwords available")
+		return nil, fmt.Errorf("no more mock passwords available")
 	}
 	password := r.passwords[0]
 	r.passwords = r.passwords[1:]
-	return password, nil
+	return []byte(password), nil
 }
 
 func TestPasswordReader_Mock(t *testing.T) {
@@ -85,7 +118,7 @@ func TestPasswordReader_Mock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	if pwd1 != "password1" {
+	if string(pwd1) != "password1" {
 		t.Errorf("Expected 'password1', got '%s'", pwd1)
 	}
 
@@ -94,7 +127,7 @@ func TestPasswordReader_Mock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	if pwd2 != "password2" {
+	if string(pwd2) != "password2" {
 		t.Errorf("Expected 'password2', got '%s'", pwd2)
 	}
 

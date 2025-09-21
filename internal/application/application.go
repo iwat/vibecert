@@ -1,13 +1,13 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/iwat/vibecert/internal/domain"
@@ -28,25 +28,43 @@ func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileRea
 	}
 }
 
-// CreateRootCA creates a new root CA certificate
-type CreateRootCARequest struct {
+// CreateCA creates a new root CA certificate
+type CreateCARequest struct {
+	IssuerCA   *domain.Certificate
 	CommonName string
 	KeySize    int
 	ValidDays  int
-	Password   string
 }
 
-func (app *App) CreateRootCA(req *CreateRootCARequest) (*domain.Certificate, *domain.KeyPair, error) {
-	keyPair, err := domain.NewRSAKeyPair(req.KeySize, req.Password)
+func (app *App) CreateCA(req *CreateCARequest) (*domain.Certificate, *domain.KeyPair, error) {
+	var issuerPrivateKey domain.PrivateKey
+	if req.IssuerCA != nil {
+		issuerKeyPair, err := app.db.KeyByPublicKeyHash(context.TODO(), req.IssuerCA.PublicKeyHash)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
+		}
+		password, err := app.passwordReader.ReadPassword("Enter password of the issuer: ")
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read password: %v", err)
+		}
+		issuerPrivateKey, err = issuerKeyPair.Decrypt(password)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to decrypt issuer private key: %v", err)
+		}
+	}
+
+	newPassword, err := app.askNewPassword()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
+	}
+
+	keyPair, err := domain.NewRSAKeyPair(req.KeySize, newPassword)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
 
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: req.CommonName,
-		},
+		Subject:               pkix.Name{CommonName: req.CommonName},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(0, 0, req.ValidDays),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
@@ -54,12 +72,22 @@ func (app *App) CreateRootCA(req *CreateRootCARequest) (*domain.Certificate, *do
 		IsCA:                  true,
 	}
 
-	privateKey, err := keyPair.PrivateKey(req.Password)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
+	if issuerPrivateKey == nil {
+		privateKey, err := keyPair.Decrypt(newPassword)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
+		}
+		issuerPrivateKey = privateKey
 	}
 
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, privateKey.Public(), privateKey)
+	var issuerCA *x509.Certificate
+	if req.IssuerCA != nil {
+		issuerCA = req.IssuerCA.X509Cert()
+	} else {
+		issuerCA = &template
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, issuerCA, issuerPrivateKey.Public(), issuerPrivateKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create x509 certificate: %v", err)
 	}
@@ -77,11 +105,11 @@ func (app *App) CreateRootCA(req *CreateRootCARequest) (*domain.Certificate, *do
 
 	_, err = tx.CreateCertificate(context.TODO(), certificate)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
+		return nil, nil, fmt.Errorf("failed to store certificate: %v", err)
 	}
 	_, err = tx.CreateKey(context.TODO(), keyPair)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create key: %v", err)
+		return nil, nil, fmt.Errorf("failed to store key: %v", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("failed to commit transaction: %v", err)
@@ -92,7 +120,7 @@ func (app *App) CreateRootCA(req *CreateRootCARequest) (*domain.Certificate, *do
 
 // PasswordReader interface for abstracting password input
 type PasswordReader interface {
-	ReadPassword(prompt string) (string, error)
+	ReadPassword(prompt string) ([]byte, error)
 }
 
 // FileWriter interface for abstracting file operations
@@ -103,4 +131,19 @@ type FileWriter interface {
 // FileReader interface for abstracting file operations
 type FileReader interface {
 	ReadFile(filename string) ([]byte, error)
+}
+
+func (app *App) askNewPassword() ([]byte, error) {
+	password, err := app.passwordReader.ReadPassword("Enter new password: ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read password: %v", err)
+	}
+	password2, err := app.passwordReader.ReadPassword("Enter new password again: ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read password: %v", err)
+	}
+	if !bytes.Equal(password, password2) {
+		return nil, fmt.Errorf("passwords do not match")
+	}
+	return []byte(password), nil
 }

@@ -65,75 +65,6 @@ type MockResult struct {
 func (r *MockResult) LastInsertId() (int64, error) { return 1, nil }
 func (r *MockResult) RowsAffected() (int64, error) { return r.rowsAffected, nil }
 
-type MockPasswordReader struct {
-	passwords []string
-	index     int
-}
-
-func NewMockPasswordReader(passwords ...string) *MockPasswordReader {
-	return &MockPasswordReader{
-		passwords: passwords,
-		index:     0,
-	}
-}
-
-func (r *MockPasswordReader) ReadPassword(prompt string) (string, error) {
-	if r.index >= len(r.passwords) {
-		return "", fmt.Errorf("no more mock passwords available")
-	}
-	password := r.passwords[r.index]
-	r.index++
-	return password, nil
-}
-
-type MockFileWriter struct {
-	files map[string][]byte
-}
-
-func NewMockFileWriter() *MockFileWriter {
-	return &MockFileWriter{
-		files: make(map[string][]byte),
-	}
-}
-
-func (w *MockFileWriter) WriteFile(filename string, data []byte, perm int) error {
-	w.files[filename] = data
-	return nil
-}
-
-func (w *MockFileWriter) GetWrittenFile(filename string) ([]byte, bool) {
-	data, exists := w.files[filename]
-	return data, exists
-}
-
-// Test helper to create in-memory SQLite database
-func createTestDatabase() (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		return nil, err
-	}
-	return db, nil
-}
-
-// Test helper to create test certificate manager with real database
-func createTestCertificateManager() (*CertificateManager, *sql.DB, error) {
-	db, err := createTestDatabase()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	dbWrapper := &DatabaseWrapper{DB: db}
-	cm := NewCertificateManager(dbWrapper)
-
-	err = cm.InitializeDatabase()
-	if err != nil {
-		db.Close()
-		return nil, nil, err
-	}
-
-	return cm, db, nil
-}
-
 // Generate a valid test certificate and key pair
 func generateTestCertAndKey() (string, string, error) {
 	// Generate private key
@@ -336,92 +267,6 @@ func TestCertificateManager_GetAllCertificates(t *testing.T) {
 	}
 }
 
-func TestCertificateManager_BuildCertificateTree(t *testing.T) {
-	cm, _, err := createTestCertificateManager()
-	if err != nil {
-		t.Fatalf("Failed to create test certificate manager: %v", err)
-	}
-
-	// Create mock certificates with parent-child relationships
-	rootCert := &Certificate{
-		SerialNumber: "root123",
-		Subject:      "CN=Root CA",
-		Issuer:       "CN=Root CA",
-		IsSelfSigned: true,
-		IsCA:         true,
-		Children:     []*Certificate{},
-	}
-
-	intermediateCert := &Certificate{
-		SerialNumber: "intermediate456",
-		Subject:      "CN=Intermediate CA",
-		Issuer:       "CN=Root CA",
-		IsSelfSigned: false,
-		IsCA:         true,
-		Children:     []*Certificate{},
-	}
-
-	leafCert := &Certificate{
-		SerialNumber: "leaf789",
-		Subject:      "CN=Leaf Certificate",
-		Issuer:       "CN=Intermediate CA",
-		IsSelfSigned: false,
-		IsCA:         false,
-		Children:     []*Certificate{},
-	}
-
-	orphanCert := &Certificate{
-		SerialNumber: "orphan999",
-		Subject:      "CN=Orphan Certificate",
-		Issuer:       "CN=Missing CA",
-		IsSelfSigned: false,
-		IsCA:         false,
-		Children:     []*Certificate{},
-	}
-
-	certificates := []*Certificate{rootCert, intermediateCert, leafCert, orphanCert}
-
-	// Build tree
-	tree := cm.BuildCertificateTree(certificates)
-
-	// Verify tree structure
-	if len(tree) != 2 { // Root cert and orphan cert should be roots
-		t.Errorf("Expected 2 root certificates, got %d", len(tree))
-	}
-
-	// Find root certificate in tree
-	var foundRoot *Certificate
-	for _, cert := range tree {
-		if cert.SerialNumber == "root123" {
-			foundRoot = cert
-			break
-		}
-	}
-
-	if foundRoot == nil {
-		t.Fatalf("Root certificate not found in tree")
-	}
-
-	// Verify root has intermediate as child
-	if len(foundRoot.Children) != 1 {
-		t.Errorf("Expected root to have 1 child, got %d", len(foundRoot.Children))
-	}
-
-	if foundRoot.Children[0].SerialNumber != "intermediate456" {
-		t.Errorf("Expected intermediate as child of root")
-	}
-
-	// Verify intermediate has leaf as child
-	intermediate := foundRoot.Children[0]
-	if len(intermediate.Children) != 1 {
-		t.Errorf("Expected intermediate to have 1 child, got %d", len(intermediate.Children))
-	}
-
-	if intermediate.Children[0].SerialNumber != "leaf789" {
-		t.Errorf("Expected leaf as child of intermediate")
-	}
-}
-
 func TestCertificateManager_ExportCertificateText(t *testing.T) {
 	cm, db, err := createTestCertificateManager()
 	if err != nil {
@@ -599,54 +444,6 @@ func TestCertificateManager_ExportPrivateKey(t *testing.T) {
 	}
 }
 
-func TestCertificateManager_ReencryptPrivateKey(t *testing.T) {
-	cm, db, err := createTestCertificateManager()
-	if err != nil {
-		t.Fatalf("Failed to create test certificate manager: %v", err)
-	}
-	defer db.Close()
-
-	// Create a certificate with encrypted key
-	req := &CreateRootCARequest{
-		CommonName: "Test Root CA",
-		KeySize:    2048,
-		ValidDays:  365,
-		Password:   "oldpassword",
-	}
-
-	cert, err := cm.CreateRootCA(req)
-	if err != nil {
-		t.Fatalf("Failed to create root CA: %v", err)
-	}
-
-	// Test reencryption
-	err = cm.ReencryptPrivateKey(cert.SerialNumber, "oldpassword", "newpassword")
-	if err != nil {
-		t.Fatalf("Failed to reencrypt private key: %v", err)
-	}
-
-	// Test with wrong current password
-	err = cm.ReencryptPrivateKey(cert.SerialNumber, "wrongpassword", "newpassword2")
-	if err == nil {
-		t.Errorf("Expected error with wrong current password")
-	}
-
-	// Test with certificate that has no key (create new cert without importing key)
-	validCertPEM2, _, err := generateTestCertAndKey()
-	if err != nil {
-		t.Fatalf("Failed to generate second test certificate: %v", err)
-	}
-	certNoKey, err := cm.ImportCertificate(validCertPEM2)
-	if err != nil {
-		t.Fatalf("Failed to import certificate without key: %v", err)
-	}
-
-	err = cm.ReencryptPrivateKey(certNoKey.SerialNumber, "password", "newpassword")
-	if err == nil {
-		t.Errorf("Expected error when reencrypting key for certificate without key")
-	}
-}
-
 func TestCertificateManager_DeleteCertificate(t *testing.T) {
 	cm, db, err := createTestCertificateManager()
 	if err != nil {
@@ -742,34 +539,6 @@ func TestCertificateManager_DeleteCertificate_SharedKey(t *testing.T) {
 
 	// Key deletion behavior depends on whether other certificates use the same key
 	// In this simple test case, we just verify the certificate was deleted
-}
-
-func TestPasswordReader_Mock(t *testing.T) {
-	reader := NewMockPasswordReader("password1", "password2")
-
-	// Test first password
-	pwd1, err := reader.ReadPassword("Enter password: ")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if pwd1 != "password1" {
-		t.Errorf("Expected 'password1', got '%s'", pwd1)
-	}
-
-	// Test second password
-	pwd2, err := reader.ReadPassword("Enter password: ")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if pwd2 != "password2" {
-		t.Errorf("Expected 'password2', got '%s'", pwd2)
-	}
-
-	// Test exhausted passwords
-	_, err = reader.ReadPassword("Enter password: ")
-	if err == nil {
-		t.Errorf("Expected error when no more passwords available")
-	}
 }
 
 func TestFileWriter_Mock(t *testing.T) {

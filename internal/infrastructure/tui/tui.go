@@ -9,12 +9,12 @@ import (
 // TerminalPasswordReader implements PasswordReader using terminal input
 type TerminalPasswordReader struct{}
 
-func (r *TerminalPasswordReader) ReadPassword(prompt string) (string, error) {
+func (r *TerminalPasswordReader) ReadPassword(prompt string) ([]byte, error) {
 	fmt.Print(prompt)
 	passwordBytes, err := term.ReadPassword(0)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	fmt.Println()
-	return string(passwordBytes), nil
+	return passwordBytes, nil
 }
