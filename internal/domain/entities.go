@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -33,6 +34,63 @@ type Certificate struct {
 	PEMData            string
 	PublicKeyHash      string
 	x509Cert           *x509.Certificate
+}
+
+// CreateCertificateRequest provides a request to create a new certificate
+type CreateCertificateRequest struct {
+	IssuerCertificate *Certificate
+	IssuerPrivateKey  crypto.PrivateKey
+	CommonName        string
+	ValidDays         int
+	IsCA              bool
+	PublicKey         crypto.PublicKey
+}
+
+func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
+	template := x509.Certificate{
+		Subject:               pkix.Name{CommonName: req.CommonName},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, req.ValidDays),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	if req.IsCA {
+		template.KeyUsage = x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning}
+	} else {
+		template.KeyUsage = x509.KeyUsageDataEncipherment | x509.KeyUsageDigitalSignature
+		template.ExtKeyUsage = []x509.ExtKeyUsage{
+			x509.ExtKeyUsageOCSPSigning,
+			x509.ExtKeyUsageServerAuth,
+			x509.ExtKeyUsageClientAuth,
+			x509.ExtKeyUsageCodeSigning,
+		}
+	}
+
+	var issuer *x509.Certificate
+	if req.IssuerCertificate != nil {
+		if !req.IssuerCertificate.IsCA {
+			return nil, fmt.Errorf("issuer is not a CA")
+		}
+		issuer = req.IssuerCertificate.X509Cert()
+	} else {
+		issuer = &template
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, issuer, req.PublicKey, req.IssuerPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create x509 certificate: %v", err)
+	}
+
+	certificate, err := CertificateFromPEM(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create certificate: %v", err)
+	}
+
+	return certificate, nil
 }
 
 // CertificateFromPEM creates a Certificate instance from the given PEM block
@@ -66,7 +124,7 @@ func CertificateFromPEM(block *pem.Block) (*Certificate, error) {
 }
 
 func (c *Certificate) X509Cert() *x509.Certificate {
-	if c.x509Cert != nil {
+	if c.x509Cert == nil {
 		block, _ := pem.Decode([]byte(c.PEMData))
 		x509Cert, _ := x509.ParseCertificate(block.Bytes)
 		c.x509Cert = x509Cert
