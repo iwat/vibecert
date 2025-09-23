@@ -59,7 +59,7 @@ FROM certificate
 WHERE id = ?
 `
 
-func (q *Queries) CertificateByID(ctx context.Context, id int64) (*domain.Certificate, error) {
+func (q *Queries) CertificateByID(ctx context.Context, id int) (*domain.Certificate, error) {
 	row := q.db.QueryRowContext(ctx, certificateByID, id)
 	var i domain.Certificate
 	err := row.Scan(
@@ -88,13 +88,8 @@ FROM certificate
 WHERE issuer_dn = ? AND serial_number = ?
 `
 
-type CertificateByIssuerAndSerialNumberParams struct {
-	IssuerDN     string
-	SerialNumber string
-}
-
-func (q *Queries) CertificateByIssuerAndSerialNumber(ctx context.Context, arg CertificateByIssuerAndSerialNumberParams) (*domain.Certificate, error) {
-	row := q.db.QueryRowContext(ctx, certificateByIssuerAndSerialNumber, arg.IssuerDN, arg.SerialNumber)
+func (q *Queries) CertificateByIssuerAndSerialNumber(ctx context.Context, issuerDN, serialNumber string) (*domain.Certificate, error) {
+	row := q.db.QueryRowContext(ctx, certificateByIssuerAndSerialNumber, issuerDN, serialNumber)
 	var i domain.Certificate
 	err := row.Scan(
 		&i.ID,
@@ -111,6 +106,51 @@ func (q *Queries) CertificateByIssuerAndSerialNumber(ctx context.Context, arg Ce
 		&i.PublicKeyHash,
 	)
 	return &i, err
+}
+
+const certificatesByIssuerAndAuthorityKeyID = `-- name: CertificatesByIssuerAndAuthorityKeyID :maby
+SELECT
+    id, serial_number, subject_dn, issuer_dn, not_before, not_after,
+    signature_algo, subject_key_id, authority_key_id,
+    is_ca, pem_data, public_key_hash
+FROM certificate
+WHERE issuer_dn = ? AND authority_key_id = ?;
+`
+
+func (q *Queries) CertificatesByIssuerAndAuthorityKeyID(ctx context.Context, issuerDN, authorityKeyID string) ([]*domain.Certificate, error) {
+	rows, err := q.db.QueryContext(ctx, certificatesByIssuerAndAuthorityKeyID, issuerDN, authorityKeyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*domain.Certificate
+	for rows.Next() {
+		var i domain.Certificate
+		if err := rows.Scan(
+			&i.ID,
+			&i.SerialNumber,
+			&i.SubjectDN,
+			&i.IssuerDN,
+			&i.NotBefore,
+			&i.NotAfter,
+			&i.SignatureAlgorithm,
+			&i.SubjectKeyID,
+			&i.AuthorityKeyID,
+			&i.IsCA,
+			&i.PEMData,
+			&i.PublicKeyHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const certificateByPublicKeyHash = `-- name: CertificateByPublicKeyHash :many

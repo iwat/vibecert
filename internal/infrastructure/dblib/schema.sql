@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS certificate (
 );
 
 CREATE INDEX idx_certificate_public_key_hash ON certificate (public_key_hash);
+CREATE INDEX idx_certificate_issuer_dn_authority_key_id ON certificate (issuer_dn, authority_key_id);
 
 CREATE TABLE IF NOT EXISTS key (
 	id INTEGER PRIMARY KEY,
