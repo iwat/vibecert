@@ -1,7 +1,6 @@
 package dblib
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -75,7 +74,7 @@ func createTestDatabase(t *testing.T) (*Queries, error) {
 	if err != nil {
 		return nil, err
 	}
-	New(db).InitializeDatabase(context.TODO())
+	New(db).InitializeDatabase(t.Context())
 	queries := New(db)
 	return queries, nil
 }

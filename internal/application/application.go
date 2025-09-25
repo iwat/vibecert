@@ -33,10 +33,10 @@ type CreateCARequest struct {
 	ValidDays  int
 }
 
-func (app *App) CreateCA(req *CreateCARequest) (*domain.Certificate, *domain.KeyPair, error) {
+func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Certificate, *domain.KeyPair, error) {
 	var issuerPrivateKey domain.PrivateKey
 	if req.IssuerCA != nil {
-		issuerKeyPair, err := app.db.KeyByPublicKeyHash(context.TODO(), req.IssuerCA.PublicKeyHash)
+		issuerKeyPair, err := app.db.KeyByPublicKeyHash(ctx, req.IssuerCA.PublicKeyHash)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
 		}
@@ -80,14 +80,14 @@ func (app *App) CreateCA(req *CreateCARequest) (*domain.Certificate, *domain.Key
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
-	tx := app.db.Begin(context.TODO())
+	tx := app.db.Begin(ctx)
 	defer tx.Rollback()
 
-	_, err = tx.CreateCertificate(context.TODO(), certificate)
+	_, err = tx.CreateCertificate(ctx, certificate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to store certificate: %v", err)
 	}
-	_, err = tx.CreateKey(context.TODO(), keyPair)
+	_, err = tx.CreateKey(ctx, keyPair)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to store key: %v", err)
 	}
@@ -108,8 +108,8 @@ type DeleteResult struct {
 	ChildrenCount      int
 }
 
-func (app *App) DeleteCertificate(id int, force bool) (*DeleteResult, error) {
-	cert, err := app.db.CertificateByID(context.TODO(), id)
+func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) (*DeleteResult, error) {
+	cert, err := app.db.CertificateByID(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("certificate with id %d not found", id)
@@ -120,10 +120,10 @@ func (app *App) DeleteCertificate(id int, force bool) (*DeleteResult, error) {
 		Subject: cert.SubjectDN,
 	}
 
-	tx := app.db.Begin(context.TODO())
+	tx := app.db.Begin(ctx)
 	defer tx.Rollback()
 
-	err = app.deleteCertificateCascade(tx.Queries, cert, force, result)
+	err = app.deleteCertificateCascade(ctx, tx.Queries, cert, force, result)
 	if err != nil {
 		return nil, err
 	}
@@ -135,8 +135,8 @@ func (app *App) DeleteCertificate(id int, force bool) (*DeleteResult, error) {
 	return result, err
 }
 
-func (app *App) deleteCertificateCascade(tx *dblib.Queries, cert *domain.Certificate, force bool, result *DeleteResult) error {
-	childCerts, err := tx.CertificatesByIssuerAndAuthorityKeyID(context.TODO(), cert.SubjectDN, cert.SubjectKeyID)
+func (app *App) deleteCertificateCascade(ctx context.Context, tx *dblib.Queries, cert *domain.Certificate, force bool, result *DeleteResult) error {
+	childCerts, err := tx.CertificatesByIssuerAndAuthorityKeyID(ctx, cert.SubjectDN, cert.SubjectKeyID)
 	if err != nil {
 		return fmt.Errorf("failed to load child certificates: %v", err)
 	}
@@ -146,13 +146,13 @@ func (app *App) deleteCertificateCascade(tx *dblib.Queries, cert *domain.Certifi
 		}
 
 		for _, childCert := range childCerts {
-			err := app.deleteCertificateCascade(tx, childCert, force, result)
+			err := app.deleteCertificateCascade(ctx, tx, childCert, force, result)
 			if err != nil {
 				return err
 			}
 		}
 	} else {
-		if err = tx.DeleteCertificate(context.TODO(), cert.ID); err != nil {
+		if err = tx.DeleteCertificate(ctx, cert.ID); err != nil {
 			return err
 		}
 		result.ChildrenCount++

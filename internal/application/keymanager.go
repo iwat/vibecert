@@ -11,7 +11,7 @@ import (
 )
 
 // ImportKey imports a private key, calculating its hash from the key itself
-func (app *App) ImportKey(filename string) error {
+func (app *App) ImportKey(ctx context.Context, filename string) error {
 	pemBytes, err := app.fileReader.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read private key file: %v", err)
@@ -35,7 +35,7 @@ func (app *App) ImportKey(filename string) error {
 				return fmt.Errorf("failed to decrypt private key: %v", err)
 			}
 		}
-		_, err = app.db.CreateKey(context.TODO(), keyPair)
+		_, err = app.db.CreateKey(ctx, keyPair)
 		if err != nil {
 			return fmt.Errorf("failed to create key: %v", err)
 		}
@@ -44,8 +44,8 @@ func (app *App) ImportKey(filename string) error {
 }
 
 // ReencryptPrivateKey changes the password of the specified private key
-func (app *App) ReencryptPrivateKey(id int) error {
-	key, err := app.db.KeyByID(context.TODO(), id)
+func (app *App) ReencryptPrivateKey(ctx context.Context, id int) error {
+	key, err := app.db.KeyByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to load private key: %v", err)
 	}
@@ -81,7 +81,7 @@ func (app *App) ReencryptPrivateKey(id int) error {
 		return fmt.Errorf("failed to reencrypt private key: %v", err)
 	}
 
-	err = app.db.UpdateKeyPEM(context.TODO(), key.ID, key.PEMData)
+	err = app.db.UpdateKeyPEM(ctx, key.ID, key.PEMData)
 	if err != nil {
 		return fmt.Errorf("failed to update private key: %v", err)
 	}

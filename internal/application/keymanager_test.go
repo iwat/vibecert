@@ -20,7 +20,7 @@ func TestKeyManager_ImportKey(t *testing.T) {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 	fileReader.files["test.pem"] = []byte(keyPair.PEMData)
-	err = app.ImportKey("test.pem")
+	err = app.ImportKey(t.Context(), "test.pem")
 	if err != nil {
 		t.Errorf("Failed to import key: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestKeyManager_ImportKey(t *testing.T) {
 	}
 	fileReader.files["test2.pem"] = []byte(keyPair2.PEMData)
 	passwordReader.passwords = []string{"secret"}
-	err = app.ImportKey("test2.pem")
+	err = app.ImportKey(t.Context(), "test2.pem")
 	if err != nil {
 		t.Errorf("Failed to import key: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "secret"}
-	err = app.ReencryptPrivateKey(keyPair.ID)
+	err = app.ReencryptPrivateKey(t.Context(), keyPair.ID)
 	if err != nil {
 		t.Fatalf("Failed to encrypt private key: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "newsecret", "newsecret"}
-	err = app.ReencryptPrivateKey(keyPair.ID)
+	err = app.ReencryptPrivateKey(t.Context(), keyPair.ID)
 	if err != nil {
 		t.Fatalf("Failed to reencrypt private key: %v", err)
 	}

@@ -5,8 +5,8 @@ import (
 )
 
 // ExportCertificateText exports certificate in human-readable format
-func (app *App) ExportCertificateText(id int) (string, error) {
-	cert, err := app.db.CertificateByID(context.TODO(), id)
+func (app *App) ExportCertificateText(ctx context.Context, id int) (string, error) {
+	cert, err := app.db.CertificateByID(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -15,8 +15,8 @@ func (app *App) ExportCertificateText(id int) (string, error) {
 }
 
 // ExportCertificateToFile exports certificate to a file
-func (app *App) ExportCertificateToFile(id int, filename string) error {
-	text, err := app.ExportCertificateText(id)
+func (app *App) ExportCertificateToFile(ctx context.Context, id int, filename string) error {
+	text, err := app.ExportCertificateText(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -25,8 +25,8 @@ func (app *App) ExportCertificateToFile(id int, filename string) error {
 }
 
 // ExportPrivateKey exports the private key for a certificate
-func (app *App) ExportPrivateKey(id int) (string, error) {
-	key, err := app.db.KeyByID(context.TODO(), id)
+func (app *App) ExportPrivateKey(ctx context.Context, id int) (string, error) {
+	key, err := app.db.KeyByID(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -35,8 +35,8 @@ func (app *App) ExportPrivateKey(id int) (string, error) {
 }
 
 // ExportPrivateKeyToFile exports private key to a file
-func (app *App) ExportPrivateKeyToFile(id int, filename string) error {
-	keyData, err := app.ExportPrivateKey(id)
+func (app *App) ExportPrivateKeyToFile(ctx context.Context, id int, filename string) error {
+	keyData, err := app.ExportPrivateKey(ctx, id)
 	if err != nil {
 		return err
 	}

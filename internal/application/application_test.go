@@ -1,7 +1,6 @@
 package application
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -19,7 +18,7 @@ func TestCreateRootCA(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "secret"}
-	cert, keyPair, err := app.CreateCA(&CreateCARequest{
+	cert, keyPair, err := app.CreateCA(t.Context(), &CreateCARequest{
 		IssuerCA:   nil,
 		CommonName: "test",
 		KeySize:    2048,
@@ -43,7 +42,7 @@ func TestCreateIntermediateCA(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"root-secret", "root-secret"}
-	rootCert, _, err := app.CreateCA(&CreateCARequest{
+	rootCert, _, err := app.CreateCA(t.Context(), &CreateCARequest{
 		IssuerCA:   nil,
 		CommonName: "test root",
 		KeySize:    2048,
@@ -51,7 +50,7 @@ func TestCreateIntermediateCA(t *testing.T) {
 	})
 
 	passwordReader.passwords = []string{"root-secret", "intermediate-secret", "intermediate-secret"}
-	cert, keyPair, err := app.CreateCA(&CreateCARequest{
+	cert, keyPair, err := app.CreateCA(t.Context(), &CreateCARequest{
 		IssuerCA:   rootCert,
 		CommonName: "test intermediate",
 		KeySize:    2048,
@@ -102,7 +101,7 @@ func TestDeleteCertificate_Cascade(t *testing.T) {
 	}
 
 	// Test deleting the root CA
-	deleteResult, err := app.DeleteCertificate(rootCert.ID, true)
+	deleteResult, err := app.DeleteCertificate(t.Context(), rootCert.ID, true)
 	if err != nil {
 		t.Fatalf("Failed to delete root CA: %v", err)
 	}
@@ -137,7 +136,7 @@ func createTestDatabase(t *testing.T) (*dblib.Queries, error) {
 	if err != nil {
 		return nil, err
 	}
-	dblib.New(db).InitializeDatabase(context.TODO())
+	dblib.New(db).InitializeDatabase(t.Context())
 	queries := dblib.New(db)
 	return queries, nil
 }
