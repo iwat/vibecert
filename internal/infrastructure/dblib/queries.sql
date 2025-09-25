@@ -47,6 +47,9 @@ SELECT
     is_ca, pem_data, public_key_hash
 FROM certificate;
 
+-- name: DeleteCertificate :exec
+DELETE FROM certificate WHERE id = ?;
+
 -- name: CreateKey :one
 INSERT OR REPLACE INTO key (
     public_key_hash, key_type, key_size, pem_data
@@ -67,3 +70,6 @@ WHERE public_key_hash = ?;
 
 -- name: UpdateKeyPEM :exec
 UPDATE key SET pem_data = ? WHERE id = ?;
+
+-- name: DeleteKey :exec
+DELETE FROM key WHERE id = ?;

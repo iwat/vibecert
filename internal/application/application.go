@@ -3,12 +3,8 @@ package application
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
+	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/iwat/vibecert/internal/domain"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
@@ -28,7 +24,7 @@ func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileRea
 	}
 }
 
-// CreateCA creates a new root CA certificate
+// CreateCARequest provides a request to create a new root CA certificate
 type CreateCARequest struct {
 	IssuerCA   *domain.Certificate
 	CommonName string
@@ -62,45 +58,28 @@ func (app *App) CreateCA(req *CreateCARequest) (*domain.Certificate, *domain.Key
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
-
-	template := x509.Certificate{
-		Subject:               pkix.Name{CommonName: req.CommonName},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(0, 0, req.ValidDays),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
+	privateKey, err := keyPair.Decrypt(newPassword)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
 	}
 
 	if issuerPrivateKey == nil {
-		privateKey, err := keyPair.Decrypt(newPassword)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
-		}
 		issuerPrivateKey = privateKey
 	}
 
-	var issuerCA *x509.Certificate
-	if req.IssuerCA != nil {
-		issuerCA = req.IssuerCA.X509Cert()
-	} else {
-		issuerCA = &template
-	}
-
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, issuerCA, issuerPrivateKey.Public(), issuerPrivateKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create x509 certificate: %v", err)
-	}
-
-	certificate, err := domain.CertificateFromPEM(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certBytes,
+	certificate, err := domain.NewCertificate(&domain.CreateCertificateRequest{
+		IssuerCertificate: req.IssuerCA,
+		IssuerPrivateKey:  issuerPrivateKey,
+		CommonName:        req.CommonName,
+		ValidDays:         req.ValidDays,
+		IsCA:              true,
+		PublicKey:         privateKey.Public(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
-	tx := app.db.Begin()
+	tx := app.db.Begin(context.TODO())
 	defer tx.Rollback()
 
 	_, err = tx.CreateCertificate(context.TODO(), certificate)
@@ -116,6 +95,69 @@ func (app *App) CreateCA(req *CreateCARequest) (*domain.Certificate, *domain.Key
 	}
 
 	return certificate, keyPair, nil
+}
+
+// DeleteCertificate deletes a certificate and optionally its key
+type DeleteResult struct {
+	Subject            string
+	CertificateDeleted bool
+	KeyDeleted         bool
+	KeyPreserved       bool
+	KeyUsageCount      int
+	ChildrenCount      int
+}
+
+func (app *App) DeleteCertificate(id int, force bool) (*DeleteResult, error) {
+	cert, err := app.db.CertificateByID(context.TODO(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("certificate with id %d not found", id)
+		}
+		return nil, fmt.Errorf("failed to load certificate: %v", err)
+	}
+	result := &DeleteResult{
+		Subject: cert.SubjectDN,
+	}
+
+	tx := app.db.Begin(context.TODO())
+	defer tx.Rollback()
+
+	err = app.deleteCertificateCascade(tx.Queries, cert, force, result)
+	if err != nil {
+		return nil, err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %v", err)
+	}
+	result.CertificateDeleted = true
+	return result, err
+}
+
+func (app *App) deleteCertificateCascade(tx *dblib.Queries, cert *domain.Certificate, force bool, result *DeleteResult) error {
+	childCerts, err := tx.CertificatesByIssuerAndAuthorityKeyID(context.TODO(), cert.SubjectDN, cert.SubjectKeyID)
+	if err != nil {
+		return fmt.Errorf("failed to load child certificates: %v", err)
+	}
+	if len(childCerts) > 0 {
+		if !force {
+			return fmt.Errorf("cannot delete certificate with child certificates")
+		}
+
+		for _, childCert := range childCerts {
+			err := app.deleteCertificateCascade(tx, childCert, force, result)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		if err = tx.DeleteCertificate(context.TODO(), cert.ID); err != nil {
+			return err
+		}
+		result.ChildrenCount++
+	}
+
+	return nil
 }
 
 // PasswordReader interface for abstracting password input

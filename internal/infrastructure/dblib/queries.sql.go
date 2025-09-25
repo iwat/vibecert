@@ -108,7 +108,7 @@ func (q *Queries) CertificateByIssuerAndSerialNumber(ctx context.Context, issuer
 	return &i, err
 }
 
-const certificatesByIssuerAndAuthorityKeyID = `-- name: CertificatesByIssuerAndAuthorityKeyID :maby
+const certificatesByIssuerAndAuthorityKeyID = `-- name: CertificatesByIssuerAndAuthorityKeyID :many
 SELECT
     id, serial_number, subject_dn, issuer_dn, not_before, not_after,
     signature_algo, subject_key_id, authority_key_id,
@@ -231,6 +231,15 @@ func (q *Queries) CreateCertificate(ctx context.Context, arg *domain.Certificate
 	return arg, nil
 }
 
+const deleteCertificate = `-- name: DeleteCertificate :exec
+DELETE FROM certificate WHERE id = ?
+`
+
+func (q *Queries) DeleteCertificate(ctx context.Context, id int) error {
+	_, err := q.db.ExecContext(ctx, deleteCertificate, id)
+	return err
+}
+
 const createKey = `-- name: CreateKey :one
 INSERT OR REPLACE INTO key (
     public_key_hash, key_type, key_size, pem_data
@@ -299,5 +308,14 @@ UPDATE key SET pem_data = ? WHERE id = ?
 
 func (q *Queries) UpdateKeyPEM(ctx context.Context, id int, pemData string) error {
 	_, err := q.db.ExecContext(ctx, updateKeyPEM, pemData, id)
+	return err
+}
+
+const deleteKey = `-- name: DeleteKey :exec
+DELETE FROM key WHERE id = ?
+`
+
+func (q *Queries) DeleteKey(ctx context.Context, id int) error {
+	_, err := q.db.ExecContext(ctx, deleteKey, id)
 	return err
 }

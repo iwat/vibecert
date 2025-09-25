@@ -6,13 +6,17 @@ import (
 )
 
 type DBTX interface {
-	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	PrepareContext(context.Context, string) (*sql.Stmt, error)
-	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func New(db *sql.DB) *Queries {
+type TxManager interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func New(db DBTX) *Queries {
 	return &Queries{db: db}
 }
 
@@ -20,20 +24,24 @@ type Queries struct {
 	db DBTX
 }
 
-func (q *Queries) Begin() *Queries {
-	tx, err := q.db.(*sql.DB).Begin()
+func (q *Queries) Begin(ctx context.Context) *TransactionalQueries {
+	tx, err := q.db.(TxManager).BeginTx(ctx, nil)
 	if err != nil {
 		panic(err)
 	}
-	return &Queries{
-		db: tx,
+	return &TransactionalQueries{
+		&Queries{db: tx},
 	}
 }
 
-func (q *Queries) Commit() error {
+type TransactionalQueries struct {
+	*Queries
+}
+
+func (q *TransactionalQueries) Commit() error {
 	return q.db.(*sql.Tx).Commit()
 }
 
-func (q *Queries) Rollback() error {
+func (q *TransactionalQueries) Rollback() error {
 	return q.db.(*sql.Tx).Rollback()
 }

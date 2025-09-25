@@ -10,7 +10,7 @@ import (
 )
 
 func TestKeyManager_ImportKey(t *testing.T) {
-	app, _, passwordReader, fileReader, err := createTestApp()
+	app, _, passwordReader, fileReader, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestKeyManager_ImportKey(t *testing.T) {
 }
 
 func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
-	app, db, passwordReader, _, err := createTestApp()
+	app, db, passwordReader, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}

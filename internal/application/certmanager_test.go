@@ -7,7 +7,7 @@ import (
 )
 
 func TestCertificateManager_BuildCertificateTree(t *testing.T) {
-	app, _, _, _, err := createTestApp()
+	app, _, _, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test certificate manager: %v", err)
 	}

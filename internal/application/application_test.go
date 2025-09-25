@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/iwat/vibecert/internal/domain"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestCreateRootCA(t *testing.T) {
-	app, _, passwordReader, _, err := createTestApp()
+	app, _, passwordReader, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test app: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestCreateRootCA(t *testing.T) {
 }
 
 func TestCreateIntermediateCA(t *testing.T) {
-	app, _, passwordReader, _, err := createTestApp()
+	app, _, passwordReader, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test app: %v", err)
 	}
@@ -67,9 +68,57 @@ func TestCreateIntermediateCA(t *testing.T) {
 	}
 }
 
+func TestDeleteCertificate_Cascade(t *testing.T) {
+	app, db, _, _, err := createTestApp(t)
+	if err != nil {
+		t.Fatalf("Failed to create test app: %v", err)
+	}
+
+	rootCert, err := db.CreateCertificate(t.Context(), &domain.Certificate{
+		SerialNumber: "R01",
+		IssuerDN:     "Root",
+		SubjectDN:    "Root",
+		SubjectKeyID: "RRR",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create root CA: %v", err)
+	}
+	if rootCert == nil {
+		t.Fatal("Root CA should not be nil")
+	}
+
+	intermediateCert, err := db.CreateCertificate(t.Context(), &domain.Certificate{
+		SerialNumber:   "I01",
+		IssuerDN:       "Root",
+		SubjectDN:      "Intermediate",
+		SubjectKeyID:   "III",
+		AuthorityKeyID: "RRR",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create intermediate CA: %v", err)
+	}
+	if intermediateCert == nil {
+		t.Fatal("Intermediate CA should not be nil")
+	}
+
+	// Test deleting the root CA
+	deleteResult, err := app.DeleteCertificate(rootCert.ID, true)
+	if err != nil {
+		t.Fatalf("Failed to delete root CA: %v", err)
+	}
+	if deleteResult == nil {
+		t.Fatal("Delete result should not be nil")
+	}
+	if deleteResult.ChildrenCount != 1 {
+		t.Fatalf("Expected 1 extra child(ren) to be deleted, got %d", deleteResult.ChildrenCount)
+	}
+}
+
 // Test helper to create test key manager with real database
-func createTestApp() (*App, *dblib.Queries, *MockPasswordReader, *MockFileReader, error) {
-	db, err := createTestDatabase()
+func createTestApp(t *testing.T) (*App, *dblib.Queries, *MockPasswordReader, *MockFileReader, error) {
+	t.Helper()
+
+	db, err := createTestDatabase(t)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -81,13 +130,15 @@ func createTestApp() (*App, *dblib.Queries, *MockPasswordReader, *MockFileReader
 }
 
 // Test helper to create in-memory SQLite database
-func createTestDatabase() (*dblib.Queries, error) {
+func createTestDatabase(t *testing.T) (*dblib.Queries, error) {
+	t.Helper()
+
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		return nil, err
 	}
+	dblib.New(db).InitializeDatabase(context.TODO())
 	queries := dblib.New(db)
-	queries.InitializeDatabase(context.TODO())
 	return queries, nil
 }
 
