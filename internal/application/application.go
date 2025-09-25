@@ -14,6 +14,7 @@ type App struct {
 	db             *dblib.Queries
 	passwordReader PasswordReader
 	fileReader     FileReader
+	fileWriter     FileWriter
 }
 
 func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileReader) *App {

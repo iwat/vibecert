@@ -209,6 +209,35 @@ func (w *MockFileWriter) GetWrittenFile(filename string) ([]byte, bool) {
 	return data, exists
 }
 
+func TestFileWriter_Mock(t *testing.T) {
+	writer := NewMockFileWriter()
+
+	filename := "test.txt"
+	content := []byte("test content")
+
+	// Write file
+	err := writer.WriteFile(filename, content, 0644)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Read file
+	data, exists := writer.GetWrittenFile(filename)
+	if !exists {
+		t.Errorf("Expected file to exist")
+	}
+
+	if string(data) != string(content) {
+		t.Errorf("Expected content '%s', got '%s'", string(content), string(data))
+	}
+
+	// Check non-existent file
+	_, exists = writer.GetWrittenFile("nonexistent.txt")
+	if exists {
+		t.Errorf("Expected file to not exist")
+	}
+}
+
 type MockFileReader struct {
 	files map[string][]byte
 }
