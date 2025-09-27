@@ -235,14 +235,14 @@ func (cli *CLI) runTreeCommand(ctx context.Context) {
 func (cli *CLI) printCertificateTree(certificates []*application.CertificateNode, indent int) {
 	indentStr := strings.Repeat("  ", indent)
 
-	for _, cert := range certificates {
+	for i, cert := range certificates {
 		marker := "├─"
-		if indent == 0 {
+		if indent == 0 || i == len(certificates)-1 {
 			marker = "└─"
 		}
 
 		keyStatus := "No Key"
-		if cert.Certificate.PublicKeyHash != "" {
+		if cert.HasKey {
 			keyStatus = "Has Key"
 		}
 

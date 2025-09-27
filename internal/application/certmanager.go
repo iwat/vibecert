@@ -10,6 +10,7 @@ import (
 
 type CertificateNode struct {
 	Certificate *domain.Certificate
+	HasKey      bool
 	Children    []*CertificateNode
 }
 
@@ -22,7 +23,9 @@ func (app *App) BuildCertificateTree(ctx context.Context) []*CertificateNode {
 
 	var nodes []*CertificateNode
 	for _, cert := range certs {
-		nodes = append(nodes, &CertificateNode{cert, nil})
+		_, err = app.db.KeyByPublicKeyHash(ctx, cert.PublicKeyHash)
+		hasKey := err == nil
+		nodes = append(nodes, &CertificateNode{cert, hasKey, nil})
 	}
 
 	var roots []*CertificateNode
