@@ -3,11 +3,14 @@ package application
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
+	"log"
 
 	"github.com/iwat/vibecert/internal/domain"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 type App struct {
@@ -17,11 +20,12 @@ type App struct {
 	fileWriter     FileWriter
 }
 
-func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileReader) *App {
+func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileReader, fileWriter FileWriter) *App {
 	return &App{
 		db:             db,
 		passwordReader: passwordReader,
 		fileReader:     fileReader,
+		fileWriter:     fileWriter,
 	}
 }
 
@@ -50,7 +54,7 @@ func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Cer
 		}
 	}
 
-	newPassword, err := app.askNewPassword()
+	newPassword, err := app.askPasswordWithConfirmation("new password")
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
 	}
@@ -98,6 +102,49 @@ func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Cer
 	return certificate, keyPair, nil
 }
 
+// ExportCertificateWithKeyToPKCS12 exports a certificate and its key to a PKCS#12 file
+func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, filename string) error {
+	cert, err := app.db.CertificateByID(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("certificate with id %d not found", id)
+		}
+		return fmt.Errorf("failed to load certificate: %v", err)
+	}
+	key, err := app.db.KeyByPublicKeyHash(ctx, cert.PublicKeyHash)
+	if err != nil {
+		return fmt.Errorf("failed to load key: %v", err)
+	}
+
+	privateKey, err := key.Decrypt(nil)
+	if err == x509.IncorrectPasswordError {
+		password, err := app.passwordReader.ReadPassword("Enter password for private key:")
+		if err != nil {
+			return fmt.Errorf("failed to read password: %v", err)
+		}
+		privateKey, err = key.Decrypt(password)
+		if err != nil {
+			return fmt.Errorf("failed to decrypt private key: %v", err)
+		}
+	}
+
+	p12Password, err := app.askPasswordWithConfirmation("password for PKCS#12 file")
+	if err != nil {
+		return fmt.Errorf("failed to read password: %v", err)
+	}
+
+	pfxData, err := pkcs12.Modern.Encode(privateKey, cert.X509Cert(), nil, string(p12Password))
+	if err != nil {
+		log.Fatalf("Failed to create PKCS#12 data: %v", err)
+	}
+
+	err = app.fileWriter.WriteFile(filename, pfxData, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write PKCS#12 file: %v", err)
+	}
+	return nil
+}
+
 // DeleteCertificate deletes a certificate and optionally its key
 type DeleteResult struct {
 	Subject            string
@@ -108,6 +155,7 @@ type DeleteResult struct {
 	ChildrenCount      int
 }
 
+// DeleteCertificate deletes a certificate and optionally its key
 func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) (*DeleteResult, error) {
 	cert, err := app.db.CertificateByID(ctx, id)
 	if err != nil {
@@ -176,12 +224,12 @@ type FileReader interface {
 	ReadFile(filename string) ([]byte, error)
 }
 
-func (app *App) askNewPassword() ([]byte, error) {
-	password, err := app.passwordReader.ReadPassword("Enter new password: ")
+func (app *App) askPasswordWithConfirmation(label string) ([]byte, error) {
+	password, err := app.passwordReader.ReadPassword("Enter " + label + ": ")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read password: %v", err)
 	}
-	password2, err := app.passwordReader.ReadPassword("Enter new password again: ")
+	password2, err := app.passwordReader.ReadPassword("Confirm " + label + ": ")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read password: %v", err)
 	}

@@ -1,39 +1,25 @@
 package main
 
 import (
-	"crypto/x509"
+	"context"
 	"database/sql"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"github.com/iwat/vibecert/internal/application"
+	"github.com/iwat/vibecert/internal/infrastructure/dblib"
+	"github.com/iwat/vibecert/internal/infrastructure/tui"
 
 	_ "github.com/mattn/go-sqlite3"
-	"golang.org/x/term"
-	"software.sslmate.com/src/go-pkcs12"
 )
 
 // CLI wraps the certificate manager with command-line interface
 type CLI struct {
-	cm     *CertificateManager
-	dbPath string
-}
-
-// DatabaseWrapper wraps sql.DB to implement DatabaseInterface
-type DatabaseWrapper struct {
-	*sql.DB
-}
-
-func (dw *DatabaseWrapper) Begin() (*sql.Tx, error) {
-	return dw.DB.Begin()
-}
-
-func (dw *DatabaseWrapper) Close() error {
-	return dw.DB.Close()
+	app *application.App
 }
 
 // OSFileWriter implements FileWriter using os.WriteFile
@@ -41,6 +27,12 @@ type OSFileWriter struct{}
 
 func (w *OSFileWriter) WriteFile(filename string, data []byte, perm int) error {
 	return os.WriteFile(filename, data, os.FileMode(perm))
+}
+
+type OSFileReader struct{}
+
+func (r *OSFileReader) ReadFile(filename string) ([]byte, error) {
+	return os.ReadFile(filename)
 }
 
 var dbPath string
@@ -90,9 +82,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize CLI: %v", err)
 	}
-	defer cli.Close()
 
 	command = commandArgs[0]
+
+	ctx := context.Background()
 
 	switch command {
 	case "certificate", "cert":
@@ -100,21 +93,21 @@ func main() {
 			printCertificateUsage()
 			os.Exit(1)
 		}
-		cli.runCertificateCommand(commandArgs[1:])
+		cli.runCertificateCommand(ctx, commandArgs[1:])
 	case "key":
 		if len(commandArgs) < 2 {
 			printKeyUsage()
 			os.Exit(1)
 		}
-		cli.runKeyCommand(commandArgs[1:])
+		cli.runKeyCommand(ctx, commandArgs[1:])
 	case "create-root":
-		cli.runCreateRootCommand()
+		cli.runCreateRootCommand(ctx)
 	case "create-intermediate":
 		cli.runCreateIntermediateCommand()
 	case "create-leaf":
 		cli.runCreateLeafCommand()
 	case "export-pkcs12":
-		cli.runExportPKCS12Command()
+		cli.runExportPKCS12Command(ctx)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -125,28 +118,24 @@ func main() {
 }
 
 func NewCLI(dbPath string) (*CLI, error) {
+	ctx := context.Background()
+
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, err
 	}
 
-	dbWrapper := &DatabaseWrapper{DB: db}
-	cm := NewCertificateManager(dbWrapper)
-	cm.SetFileWriter(&OSFileWriter{})
-
-	if err := cm.InitializeDatabase(); err != nil {
+	q := dblib.New(db)
+	if err := q.InitializeDatabase(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	return &CLI{
-		cm:     cm,
-		dbPath: dbPath,
-	}, nil
-}
+	app := application.NewApp(q, &tui.TerminalPasswordReader{}, &OSFileReader{}, &OSFileWriter{})
 
-func (cli *CLI) Close() {
-	cli.cm.db.Close()
+	return &CLI{
+		app: app,
+	}, nil
 }
 
 func printUsage() {
@@ -159,12 +148,13 @@ func printUsage() {
 	fmt.Println("  certificate tree    Display certificate dependency tree")
 	fmt.Println("  certificate import  Import certificate from file")
 	fmt.Println("  certificate export  Export certificate with human-readable content")
-	fmt.Println("  certificate delete  Delete certificate and its private key")
+	fmt.Println("  certificate delete  Delete certificate and its dedicated private key")
 	fmt.Println("")
 	fmt.Println("Key operations:")
 	fmt.Println("  key import          Import private key from file")
 	fmt.Println("  key export          Export private key")
 	fmt.Println("  key reencrypt       Change private key password")
+	fmt.Println("  key delete          Delete private key")
 	fmt.Println("")
 	fmt.Println("Certificate Creation:")
 	fmt.Println("  create-root         Generate a new root certificate and key")
@@ -186,9 +176,10 @@ func printCertificateUsage() {
 	fmt.Println("Usage: vibecert certificate <subcommand> [arguments]")
 	fmt.Println("")
 	fmt.Println("Available subcommands:")
+	fmt.Println("  tree      Display certificate dependency tree")
 	fmt.Println("  import    Import certificate from file")
 	fmt.Println("  export    Export certificate with human-readable content")
-	fmt.Println("  delete    Delete certificate and its private key")
+	fmt.Println("  delete    Delete certificate and its dedicated private key")
 	fmt.Println("")
 	fmt.Println("For subcommand-specific help, use: vibecert certificate <subcommand> --help")
 }
@@ -200,6 +191,7 @@ func printKeyUsage() {
 	fmt.Println("  import     Import private key from file")
 	fmt.Println("  export     Export private key")
 	fmt.Println("  reencrypt  Change private key password")
+	fmt.Println("  delete     Delete private key")
 	fmt.Println("")
 	fmt.Println("For subcommand-specific help, use: vibecert key <subcommand> --help")
 }
@@ -235,17 +227,12 @@ func getDefaultDatabasePath() string {
 	return filepath.Join(vibecertDir, "vibecert.db")
 }
 
-func (cli *CLI) runTreeCommand() {
-	certificates, err := cli.cm.GetAllCertificates()
-	if err != nil {
-		log.Fatalf("Failed to load certificates: %v", err)
-	}
-
-	tree := cli.cm.BuildCertificateTree(certificates)
+func (cli *CLI) runTreeCommand(ctx context.Context) {
+	tree := cli.app.BuildCertificateTree(ctx)
 	cli.printCertificateTree(tree, 0)
 }
 
-func (cli *CLI) printCertificateTree(certificates []*Certificate, indent int) {
+func (cli *CLI) printCertificateTree(certificates []*application.CertificateNode, indent int) {
 	indentStr := strings.Repeat("  ", indent)
 
 	for _, cert := range certificates {
@@ -255,12 +242,12 @@ func (cli *CLI) printCertificateTree(certificates []*Certificate, indent int) {
 		}
 
 		keyStatus := "No Key"
-		if cert.KeyHash != "" {
+		if cert.Certificate.PublicKeyHash != "" {
 			keyStatus = "Has Key"
 		}
 
-		fmt.Printf("%s%s %s (Serial: %s) [%s]\n",
-			indentStr, marker, cert.Subject, cert.SerialNumber, keyStatus)
+		fmt.Printf("%s%s %s (id: %d) [%s]\n",
+			indentStr, marker, cert.Certificate.SubjectDN, cert.Certificate.ID, keyStatus)
 
 		if len(cert.Children) > 0 {
 			cli.printCertificateTree(cert.Children, indent+1)
@@ -268,7 +255,7 @@ func (cli *CLI) printCertificateTree(certificates []*Certificate, indent int) {
 	}
 }
 
-func (cli *CLI) runCertificateCommand(args []string) {
+func (cli *CLI) runCertificateCommand(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		printCertificateUsage()
 		os.Exit(1)
@@ -277,13 +264,13 @@ func (cli *CLI) runCertificateCommand(args []string) {
 	subcommand := args[0]
 	switch subcommand {
 	case "tree":
-		cli.runTreeCommand()
+		cli.runTreeCommand(ctx)
 	case "import":
-		cli.runCertificateImportCommand(args[1:])
+		cli.runCertificateImportCommand(ctx, args[1:])
 	case "export":
-		cli.runCertificateExportCommand(args[1:])
+		cli.runCertificateExportCommand(ctx, args[1:])
 	case "delete":
-		cli.runCertificateDeleteCommand(args[1:])
+		cli.runCertificateDeleteCommand(ctx, args[1:])
 	case "help", "-h", "--help":
 		printCertificateUsage()
 	default:
@@ -293,7 +280,7 @@ func (cli *CLI) runCertificateCommand(args []string) {
 	}
 }
 
-func (cli *CLI) runKeyCommand(args []string) {
+func (cli *CLI) runKeyCommand(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		printKeyUsage()
 		os.Exit(1)
@@ -302,11 +289,11 @@ func (cli *CLI) runKeyCommand(args []string) {
 	subcommand := args[0]
 	switch subcommand {
 	case "import":
-		cli.runKeyImportCommand(args[1:])
+		cli.runKeyImportCommand(ctx, args[1:])
 	case "export":
-		cli.runKeyExportCommand(args[1:])
+		cli.runKeyExportCommand(ctx, args[1:])
 	case "reencrypt":
-		cli.runKeyReencryptCommand(args[1:])
+		cli.runKeyReencryptCommand(ctx, args[1:])
 	case "help", "-h", "--help":
 		printKeyUsage()
 	default:
@@ -316,7 +303,7 @@ func (cli *CLI) runKeyCommand(args []string) {
 	}
 }
 
-func (cli *CLI) runCertificateImportCommand(args []string) {
+func (cli *CLI) runCertificateImportCommand(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("certificate import", flag.ExitOnError)
 
 	var (
@@ -340,29 +327,18 @@ func (cli *CLI) runCertificateImportCommand(args []string) {
 		os.Exit(1)
 	}
 
-	// Load certificate
-	certData, err := os.ReadFile(*certFile)
+	importedCerts, err := cli.app.ImportCertificates(ctx, *certFile)
 	if err != nil {
-		log.Fatalf("Failed to read certificate file: %v", err)
-	}
-
-	cert, err := cli.cm.ImportCertificate(string(certData))
-	if err != nil {
-		log.Fatalf("Failed to import certificate: %v", err)
+		log.Fatalf("Failed to import certificate(s): %v", err)
 	}
 
 	fmt.Printf("Certificate imported successfully:\n")
-	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
-	fmt.Printf("  Subject: %s\n", cert.Subject)
-	fmt.Printf("  Key Hash: %s\n", cert.KeyHash)
-	if cert.KeyHash != "" {
-		fmt.Printf("  Private key: found matching key\n")
-	} else {
-		fmt.Printf("  Private key: not found (import key separately)\n")
+	for _, cert := range importedCerts {
+		fmt.Printf("%d) %s\n", cert.ID, cert.SubjectDN)
 	}
 }
 
-func (cli *CLI) runKeyImportCommand(args []string) {
+func (cli *CLI) runKeyImportCommand(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("key import", flag.ExitOnError)
 
 	var (
@@ -387,64 +363,22 @@ func (cli *CLI) runKeyImportCommand(args []string) {
 		os.Exit(1)
 	}
 
-	// Load private key
-	keyBytes, err := os.ReadFile(*keyFile)
+	importedKeys, err := cli.app.ImportKeys(ctx, *keyFile)
 	if err != nil {
-		log.Fatalf("Failed to read key file: %v", err)
-	}
-
-	keyData := string(keyBytes)
-	var keyHash string
-
-	// Check if the key is encrypted and get password if needed
-	block, _ := pem.Decode(keyBytes)
-	if block != nil && x509.IsEncryptedPEMBlock(block) {
-		fmt.Print("Private key is encrypted. Enter password: ")
-		passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			log.Fatalf("Failed to read password: %v", err)
-		}
-		fmt.Println()
-
-		keyHash, err = cli.cm.ImportKeyWithPassword(keyData, string(passwordBytes))
-		if err != nil {
-			log.Fatalf("Failed to import key: %v", err)
-		}
-	} else {
-		keyHash, err = cli.cm.ImportKey(keyData)
-		if err != nil {
-			log.Fatalf("Failed to import key: %v", err)
-		}
+		log.Fatalf("Failed to import key: %v", err)
 	}
 
 	fmt.Printf("Private key imported successfully:\n")
-	fmt.Printf("  Key Hash: %s\n", keyHash)
-
-	// Check if any certificates were linked
-	rows, err := cli.cm.db.Query("SELECT serial_number, subject FROM certificates WHERE key_hash = ?", keyHash)
-	if err == nil {
-		defer rows.Close()
-		linkedCerts := 0
-		fmt.Printf("  Linked certificates:\n")
-		for rows.Next() {
-			var serial, subject string
-			if rows.Scan(&serial, &subject) == nil {
-				fmt.Printf("    - %s (%s)\n", subject, serial)
-				linkedCerts++
-			}
-		}
-		if linkedCerts == 0 {
-			fmt.Printf("    - No matching certificates found\n")
-		}
+	for _, k := range importedKeys {
+		fmt.Printf("%d) %s (%s, %d bits)\n", k.ID, k.PublicKeyHash, k.KeyType, k.KeySize)
 	}
 }
 
-func (cli *CLI) runCertificateExportCommand(args []string) {
+func (cli *CLI) runCertificateExportCommand(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("certificate export", flag.ExitOnError)
 
 	var (
-		serial     = fs.String("serial", "", "Certificate serial number (required)")
-		outputFile = fs.String("output", "", "Output file path (default: {serial}.txt)")
+		id = fs.Int("id", -1, "Certificate id (required)")
 	)
 
 	fs.Usage = func() {
@@ -458,32 +392,24 @@ func (cli *CLI) runCertificateExportCommand(args []string) {
 
 	fs.Parse(args)
 
-	if *serial == "" {
-		fmt.Println("Error: serial number is required")
+	if *id == -1 {
+		fmt.Println("Error: certificate id is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Determine output file
-	outputPath := *outputFile
-	if outputPath == "" {
-		outputPath = fmt.Sprintf("%s.txt", *serial)
-	}
-
-	err := cli.cm.ExportCertificateToFile(*serial, outputPath)
+	pem, err := cli.app.ExportCertificate(ctx, *id)
 	if err != nil {
 		log.Fatalf("Failed to export certificate: %v", err)
 	}
-
-	fmt.Printf("Certificate exported to: %s\n", outputPath)
+	fmt.Println(pem)
 }
 
-func (cli *CLI) runKeyExportCommand(args []string) {
+func (cli *CLI) runKeyExportCommand(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("key export", flag.ExitOnError)
 
 	var (
-		serial     = fs.String("serial", "", "Certificate serial number (required)")
-		outputFile = fs.String("output", "", "Output key file path (default: {serial}.key)")
+		id = fs.Int("id", -1, "Key id (required)")
 	)
 
 	fs.Usage = func() {
@@ -497,31 +423,24 @@ func (cli *CLI) runKeyExportCommand(args []string) {
 
 	fs.Parse(args)
 
-	if *serial == "" {
-		fmt.Println("Error: serial number is required")
+	if *id == -1 {
+		fmt.Println("Error: key id is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Determine output file
-	outputPath := *outputFile
-	if outputPath == "" {
-		outputPath = fmt.Sprintf("%s.key", *serial)
-	}
-
-	err := cli.cm.ExportPrivateKeyToFile(*serial, outputPath)
+	pem, err := cli.app.ExportPrivateKey(ctx, *id)
 	if err != nil {
 		log.Fatalf("Failed to export private key: %v", err)
 	}
-
-	fmt.Printf("Private key exported to: %s\n", outputPath)
+	fmt.Println(pem)
 }
 
-func (cli *CLI) runKeyReencryptCommand(args []string) {
+func (cli *CLI) runKeyReencryptCommand(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("key reencrypt", flag.ExitOnError)
 
 	var (
-		serial = fs.String("serial", "", "Certificate serial number (required)")
+		id = fs.Int("id", -1, "Key id (required)")
 	)
 
 	fs.Usage = func() {
@@ -535,54 +454,26 @@ func (cli *CLI) runKeyReencryptCommand(args []string) {
 
 	fs.Parse(args)
 
-	if *serial == "" {
-		fmt.Println("Error: serial number is required")
+	if *id == -1 {
+		fmt.Println("Error: key id is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Get current password
-	fmt.Print("Enter current password: ")
-	currentPasswordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read current password: %v", err)
-	}
-	fmt.Println()
-
-	// Get new password
-	fmt.Print("Enter new password: ")
-	newPasswordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read new password: %v", err)
-	}
-	fmt.Println()
-
-	fmt.Print("Confirm new password: ")
-	confirmPasswordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read password confirmation: %v", err)
-	}
-	fmt.Println()
-
-	newPassword := string(newPasswordBytes)
-	if newPassword != string(confirmPasswordBytes) {
-		log.Fatalf("Passwords do not match")
-	}
-
-	err = cli.cm.ReencryptPrivateKey(*serial, string(currentPasswordBytes), newPassword)
+	err := cli.app.ReencryptPrivateKey(ctx, *id)
 	if err != nil {
 		log.Fatalf("Failed to reencrypt private key: %v", err)
 	}
 
-	fmt.Printf("Private key password changed successfully for certificate %s\n", *serial)
+	fmt.Printf("Private key password changed successfully for key %d\n", *id)
 }
 
-func (cli *CLI) runCertificateDeleteCommand(args []string) {
+func (cli *CLI) runCertificateDeleteCommand(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("certificate delete", flag.ExitOnError)
 
 	var (
-		serial = fs.String("serial", "", "Certificate serial number to delete (required)")
-		force  = fs.Bool("force", false, "Skip confirmation prompt")
+		id    = fs.Int("id", -1, "Certificate id to delete (required)")
+		force = fs.Bool("force", false, "Skip confirmation prompt")
 	)
 
 	fs.Usage = func() {
@@ -596,75 +487,21 @@ func (cli *CLI) runCertificateDeleteCommand(args []string) {
 
 	fs.Parse(args)
 
-	if *serial == "" {
-		fmt.Println("Error: serial number is required")
+	if *id == -1 {
+		fmt.Println("Error: certificate id is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Get certificate info before deletion
-	cert, err := cli.cm.GetCertificate(*serial)
-	if err != nil {
-		log.Fatalf("Failed to load certificate: %v", err)
-	}
-
-	// Show what will be deleted
-	fmt.Printf("Certificate to delete:\n")
-	fmt.Printf("  Serial: %s\n", *serial)
-	fmt.Printf("  Subject: %s\n", cert.Subject)
-	if cert.KeyHash != "" {
-		fmt.Printf("  Private key: Yes (will also be deleted)\n")
-	} else {
-		fmt.Printf("  Private key: No\n")
-	}
-	fmt.Println()
-
-	// Confirmation prompt unless --force is used
-	if !*force {
-		fmt.Print("Are you sure you want to delete this certificate? (y/N): ")
-		var response string
-		fmt.Scanln(&response)
-		if response != "y" && response != "Y" && response != "yes" && response != "Yes" {
-			fmt.Println("Delete cancelled.")
-			os.Exit(0)
-		}
-	}
-
-	result, err := cli.cm.DeleteCertificate(*serial, *force)
+	result, err := cli.app.DeleteCertificate(ctx, *id, *force)
 	if err != nil {
 		log.Fatalf("Failed to delete certificate: %v", err)
 	}
 
-	if result.ChildrenCount > 0 && !*force {
-		fmt.Printf("Warning: This certificate is a parent to %d other certificate(s).\n", result.ChildrenCount)
-		fmt.Println("Deleting it may leave orphaned certificates in the database.")
-		fmt.Print("Continue with deletion anyway? (y/N): ")
-		var response string
-		fmt.Scanln(&response)
-		if response != "y" && response != "Y" && response != "yes" && response != "Yes" {
-			fmt.Println("Delete cancelled.")
-			os.Exit(0)
-		}
-
-		// Retry deletion with force
-		result, err = cli.cm.DeleteCertificate(*serial, true)
-		if err != nil {
-			log.Fatalf("Failed to delete certificate: %v", err)
-		}
-	}
-
-	if result.KeyDeleted {
-		fmt.Printf("✓ Associated private key deleted\n")
-	} else if result.KeyPreserved {
-		fmt.Printf("✓ Private key preserved (used by %d other certificate(s))\n", result.KeyUsageCount)
-	}
-
-	fmt.Printf("✓ Certificate deleted successfully\n")
-	fmt.Printf("  Serial: %s\n", *serial)
-	fmt.Printf("  Subject: %s\n", result.Subject)
+	fmt.Println(result)
 }
 
-func (cli *CLI) runCreateRootCommand() {
+func (cli *CLI) runCreateRootCommand(ctx context.Context) {
 	fs := flag.NewFlagSet("create-root", flag.ExitOnError)
 
 	var (
@@ -690,36 +527,17 @@ func (cli *CLI) runCreateRootCommand() {
 		os.Exit(1)
 	}
 
-	// Prompt for password
-	fmt.Print("Enter password to encrypt private key: ")
-	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read password: %v", err)
-	}
-	fmt.Println()
-	password := string(passwordBytes)
-
-	if len(password) == 0 {
-		fmt.Println("Error: password cannot be empty")
-		os.Exit(1)
-	}
-
-	req := &CreateRootCARequest{
+	cert, _, err := cli.app.CreateCA(ctx, &application.CreateCARequest{
 		CommonName: *commonName,
 		KeySize:    *keySize,
 		ValidDays:  *validDays,
-		Password:   password,
-	}
-
-	cert, err := cli.cm.CreateRootCA(req)
+	})
 	if err != nil {
 		log.Fatalf("Failed to create root CA: %v", err)
 	}
 
 	fmt.Printf("Root CA certificate generated successfully:\n")
 	fmt.Printf("  Serial: %s\n", cert.SerialNumber)
-	fmt.Printf("  Subject: %s\n", cert.Subject)
-	fmt.Printf("  Valid for: %d days\n", *validDays)
 }
 
 func (cli *CLI) runCreateIntermediateCommand() {
@@ -730,14 +548,12 @@ func (cli *CLI) runCreateLeafCommand() {
 	fmt.Println("create-leaf command not yet implemented")
 }
 
-func (cli *CLI) runExportPKCS12Command() {
+func (cli *CLI) runExportPKCS12Command(ctx context.Context) {
 	fs := flag.NewFlagSet("export-pkcs12", flag.ExitOnError)
 
 	var (
-		certSerial     = fs.String("serial", "", "Serial number of certificate to export (required)")
-		outputFile     = fs.String("output", "", "Output PKCS#12 file path (default: {serial}.p12)")
-		friendlyName   = fs.String("name", "", "Friendly name for the certificate (default: certificate CN)")
-		includeCACerts = fs.Bool("include-ca", true, "Include CA certificates in the chain")
+		id         = fs.Int("id", -1, "Certificate id to export (required)")
+		outputFile = fs.String("output", "", "Output PKCS#12 file path (default: {serial}.p12)")
 	)
 
 	fs.Usage = func() {
@@ -751,91 +567,14 @@ func (cli *CLI) runExportPKCS12Command() {
 
 	fs.Parse(os.Args[2:])
 
-	if *certSerial == "" {
-		fmt.Println("Error: serial number is required")
+	if *id == -1 {
+		fmt.Println("Error: certificate id is required")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	// Load certificate
-	cert, err := cli.cm.GetCertificate(*certSerial)
+	err := cli.app.ExportCertificateWithKeyToPKCS12(ctx, *id, *outputFile)
 	if err != nil {
-		log.Fatalf("Failed to load certificate: %v", err)
-	}
-
-	if cert.KeyHash == "" {
-		log.Fatalf("No private key associated with certificate %s", *certSerial)
-	}
-
-	// Get private key with password
-	fmt.Print("Enter password for private key: ")
-	keyPasswordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read key password: %v", err)
-	}
-	fmt.Println()
-
-	keyData, err := cli.cm.ExportPrivateKey(*certSerial)
-	if err != nil {
-		log.Fatalf("Failed to get private key: %v", err)
-	}
-
-	privateKey, err := cli.cm.loadPrivateKeyFromPEM(keyData, string(keyPasswordBytes))
-	if err != nil {
-		log.Fatalf("Failed to decrypt private key: %v", err)
-	}
-
-	// Prompt for PKCS#12 export password
-	fmt.Print("Enter password for PKCS#12 file: ")
-	p12PasswordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		log.Fatalf("Failed to read PKCS#12 password: %v", err)
-	}
-	fmt.Println()
-	p12Password := string(p12PasswordBytes)
-
-	if len(p12Password) == 0 {
-		fmt.Println("Error: PKCS#12 password cannot be empty")
-		os.Exit(1)
-	}
-
-	// Set friendly name
-	name := *friendlyName
-	if name == "" {
-		name = cert.X509Cert.Subject.CommonName
-		if name == "" {
-			name = fmt.Sprintf("Certificate %s", *certSerial)
-		}
-	}
-
-	// For now, create PKCS#12 with just the certificate
-	var caCerts []*x509.Certificate
-	if *includeCACerts {
-		// TODO: Implement CA certificate chain collection
-	}
-
-	// Create PKCS#12 data
-	pfxData, err := pkcs12.Modern.Encode(privateKey, cert.X509Cert, caCerts, p12Password)
-	if err != nil {
-		log.Fatalf("Failed to create PKCS#12 data: %v", err)
-	}
-
-	// Determine output file
-	output := *outputFile
-	if output == "" {
-		output = fmt.Sprintf("%s.p12", *certSerial)
-	}
-
-	// Save PKCS#12 file
-	if err := os.WriteFile(output, pfxData, 0600); err != nil {
-		log.Fatalf("Failed to save PKCS#12 file: %v", err)
-	}
-
-	fmt.Printf("PKCS#12 file exported successfully:\n")
-	fmt.Printf("  File: %s\n", output)
-	fmt.Printf("  Certificate: %s\n", cert.X509Cert.Subject.CommonName)
-	fmt.Printf("  Friendly name: %s\n", name)
-	if len(caCerts) > 0 {
-		fmt.Printf("  CA certificates included: %d\n", len(caCerts))
+		log.Fatalf("Failed to export certificate: %v", err)
 	}
 }

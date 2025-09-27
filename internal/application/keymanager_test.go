@@ -10,7 +10,7 @@ import (
 )
 
 func TestKeyManager_ImportKey(t *testing.T) {
-	app, _, passwordReader, fileReader, err := createTestApp(t)
+	app, _, passwordReader, fileReader, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
@@ -20,9 +20,12 @@ func TestKeyManager_ImportKey(t *testing.T) {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 	fileReader.files["test.pem"] = []byte(keyPair.PEMData)
-	err = app.ImportKey(t.Context(), "test.pem")
+	importedKeys, err := app.ImportKeys(t.Context(), "test.pem")
 	if err != nil {
 		t.Errorf("Failed to import key: %v", err)
+	}
+	if len(importedKeys) != 1 {
+		t.Errorf("Expected 1 imported key, got %d", len(importedKeys))
 	}
 
 	keyPair2, err := domain.NewRSAKeyPair(2048, []byte("secret"))
@@ -31,14 +34,14 @@ func TestKeyManager_ImportKey(t *testing.T) {
 	}
 	fileReader.files["test2.pem"] = []byte(keyPair2.PEMData)
 	passwordReader.passwords = []string{"secret"}
-	err = app.ImportKey(t.Context(), "test2.pem")
+	importedKeys, err = app.ImportKeys(t.Context(), "test2.pem")
 	if err != nil {
 		t.Errorf("Failed to import key: %v", err)
 	}
 }
 
 func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
-	app, db, passwordReader, _, err := createTestApp(t)
+	app, db, passwordReader, _, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}

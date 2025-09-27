@@ -12,7 +12,7 @@ import (
 )
 
 func TestCreateRootCA(t *testing.T) {
-	app, _, passwordReader, _, err := createTestApp(t)
+	app, _, passwordReader, _, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test app: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestCreateRootCA(t *testing.T) {
 }
 
 func TestCreateIntermediateCA(t *testing.T) {
-	app, _, passwordReader, _, err := createTestApp(t)
+	app, _, passwordReader, _, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test app: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestCreateIntermediateCA(t *testing.T) {
 }
 
 func TestDeleteCertificate_Cascade(t *testing.T) {
-	app, db, _, _, err := createTestApp(t)
+	app, db, _, _, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test app: %v", err)
 	}
@@ -114,18 +114,19 @@ func TestDeleteCertificate_Cascade(t *testing.T) {
 }
 
 // Test helper to create test key manager with real database
-func createTestApp(t *testing.T) (*App, *dblib.Queries, *MockPasswordReader, *MockFileReader, error) {
+func createTestApp(t *testing.T) (*App, *dblib.Queries, *MockPasswordReader, *MockFileReader, *MockFileWriter, error) {
 	t.Helper()
 
 	db, err := createTestDatabase(t)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 
 	passwordReader := NewMockPasswordReader()
 	fileReader := NewMockFileReader()
+	fileWriter := NewMockFileWriter()
 
-	return NewApp(db, passwordReader, fileReader), db, passwordReader, fileReader, nil
+	return NewApp(db, passwordReader, fileReader, fileWriter), db, passwordReader, fileReader, fileWriter, nil
 }
 
 // Test helper to create in-memory SQLite database

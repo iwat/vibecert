@@ -11,11 +11,16 @@ import (
 )
 
 // ImportKey imports a private key, calculating its hash from the key itself
-func (app *App) ImportKey(ctx context.Context, filename string) error {
+func (app *App) ImportKeys(ctx context.Context, filename string) ([]*domain.KeyPair, error) {
 	pemBytes, err := app.fileReader.ReadFile(filename)
 	if err != nil {
-		return fmt.Errorf("failed to read private key file: %v", err)
+		return nil, fmt.Errorf("failed to read private key file: %v", err)
 	}
+
+	tx := app.db.Begin(ctx)
+	defer tx.Rollback()
+
+	var importedKeys []*domain.KeyPair
 
 	for {
 		var block *pem.Block
@@ -28,19 +33,24 @@ func (app *App) ImportKey(ctx context.Context, filename string) error {
 		if err == domain.ErrEncryptedPrivateKey {
 			currentPassword, err := app.passwordReader.ReadPassword("Entry current password: ")
 			if err != nil {
-				return fmt.Errorf("failed to read password: %v", err)
+				return nil, fmt.Errorf("failed to read password: %v", err)
 			}
 			keyPair, err = domain.KeyPairFromPEM(block, currentPassword)
 			if err != nil {
-				return fmt.Errorf("failed to decrypt private key: %v", err)
+				return nil, fmt.Errorf("failed to decrypt private key: %v", err)
 			}
 		}
-		_, err = app.db.CreateKey(ctx, keyPair)
+		importedKey, err := tx.CreateKey(ctx, keyPair)
 		if err != nil {
-			return fmt.Errorf("failed to create key: %v", err)
+			return nil, fmt.Errorf("failed to create key: %v", err)
 		}
+		importedKeys = append(importedKeys, importedKey)
 	}
-	return nil
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %v", err)
+	}
+	return importedKeys, nil
 }
 
 // ReencryptPrivateKey changes the password of the specified private key
@@ -87,4 +97,14 @@ func (app *App) ReencryptPrivateKey(ctx context.Context, id int) error {
 	}
 
 	return nil
+}
+
+// ExportPrivateKey exports the private key for a certificate
+func (app *App) ExportPrivateKey(ctx context.Context, id int) (string, error) {
+	key, err := app.db.KeyByID(ctx, id)
+	if err != nil {
+		return "", err
+	}
+
+	return key.PEMData, nil
 }

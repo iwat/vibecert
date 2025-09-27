@@ -7,44 +7,51 @@ import (
 )
 
 func TestCertificateManager_BuildCertificateTree(t *testing.T) {
-	app, _, _, _, err := createTestApp(t)
+	app, db, _, _, _, err := createTestApp(t)
 	if err != nil {
 		t.Fatalf("Failed to create test certificate manager: %v", err)
 	}
 
 	// Create mock certificates with parent-child relationships
-	rootCert := &domain.Certificate{
+	_, err = db.CreateCertificate(t.Context(), &domain.Certificate{
 		SerialNumber: "root123",
 		SubjectDN:    "CN=Root CA",
 		IssuerDN:     "CN=Root CA",
 		IsCA:         true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create root certificate: %v", err)
 	}
 
-	intermediateCert := &domain.Certificate{
+	_, err = db.CreateCertificate(t.Context(), &domain.Certificate{
 		SerialNumber: "intermediate456",
 		SubjectDN:    "CN=Intermediate CA",
 		IssuerDN:     "CN=Root CA",
 		IsCA:         true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create intermediate certificate: %v", err)
 	}
 
-	leafCert := &domain.Certificate{
+	_, err = db.CreateCertificate(t.Context(), &domain.Certificate{
 		SerialNumber: "leaf789",
 		SubjectDN:    "CN=Leaf Certificate",
 		IssuerDN:     "CN=Intermediate CA",
 		IsCA:         false,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create leaf certificate: %v", err)
 	}
 
-	orphanCert := &domain.Certificate{
+	_, err = db.CreateCertificate(t.Context(), &domain.Certificate{
 		SerialNumber: "orphan999",
 		SubjectDN:    "CN=Orphan Certificate",
 		IssuerDN:     "CN=Missing CA",
 		IsCA:         false,
-	}
-
-	certificates := []*domain.Certificate{rootCert, intermediateCert, leafCert, orphanCert}
+	})
 
 	// Build tree
-	tree := app.BuildCertificateTree(certificates)
+	tree := app.BuildCertificateTree(t.Context())
 
 	// Verify tree structure
 	if len(tree) != 2 { // Root cert and orphan cert should be roots

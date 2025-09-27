@@ -1,6 +1,8 @@
 package application
 
 import (
+	"context"
+	"encoding/pem"
 	"sort"
 
 	"github.com/iwat/vibecert/internal/domain"
@@ -12,9 +14,14 @@ type CertificateNode struct {
 }
 
 // BuildCertificateTree builds a hierarchical tree of certificates
-func (app *App) BuildCertificateTree(certificates []*domain.Certificate) []*CertificateNode {
+func (app *App) BuildCertificateTree(ctx context.Context) []*CertificateNode {
+	certs, err := app.db.AllCertificates(ctx)
+	if err != nil {
+		return nil
+	}
+
 	var nodes []*CertificateNode
-	for _, cert := range certificates {
+	for _, cert := range certs {
 		nodes = append(nodes, &CertificateNode{cert, nil})
 	}
 
@@ -46,6 +53,50 @@ func (app *App) BuildCertificateTree(certificates []*domain.Certificate) []*Cert
 	}
 
 	return roots
+}
+
+// ExportCertificate exports certificate in human-readable format
+func (app *App) ExportCertificate(ctx context.Context, id int) (string, error) {
+	cert, err := app.db.CertificateByID(ctx, id)
+	if err != nil {
+		return "", err
+	}
+
+	return cert.Text(), nil
+}
+
+func (app *App) ImportCertificates(ctx context.Context, filename string) ([]*domain.Certificate, error) {
+	data, err := app.fileReader.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	var importedCerts []*domain.Certificate
+
+	tx := app.db.Begin(ctx)
+	defer tx.Rollback()
+
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			break
+		}
+		cert, err := domain.CertificateFromPEM(block)
+		if err != nil {
+			return nil, err
+		}
+
+		importedCert, err := tx.CreateCertificate(ctx, cert)
+		if err != nil {
+			return nil, err
+		}
+		importedCerts = append(importedCerts, importedCert)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return importedCerts, nil
 }
 
 func sortCertificates(certificates []*CertificateNode) {
