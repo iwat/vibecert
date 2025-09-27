@@ -6,7 +6,7 @@ import (
 	"github.com/iwat/vibecert/internal/domain"
 )
 
-const allCertificates = `-- name: AllCertificated :many
+const allCertificates = `-- name: AllCertificates :many
 SELECT
     id, serial_number, subject_dn, issuer_dn, not_before, not_after,
     signature_algo, subject_key_id, authority_key_id,

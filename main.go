@@ -247,13 +247,13 @@ func (cli *CLI) printCertificateTree(certs []*application.CertificateNode, prefi
 			extension = "│ "
 		}
 
-		keyStatus := "No Key"
+		keyStatus := "🫥"
 		if cert.HasKey {
-			keyStatus = "Has Key"
+			keyStatus = "🔑"
 		}
 
-		fmt.Printf("%s%s %s (id: %d) [%s]\n",
-			prefix, marker, cert.Certificate.SubjectDN, cert.Certificate.ID, keyStatus)
+		fmt.Printf("%s%s (id: %d) %s %s\n",
+			prefix, marker, cert.Certificate.ID, cert.Certificate.SubjectDN, keyStatus)
 
 		if len(cert.Children) > 0 {
 			newPrefix := prefix + extension
