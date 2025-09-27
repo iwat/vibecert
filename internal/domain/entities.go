@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdh"
 	"crypto/ecdsa"
@@ -15,6 +16,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -142,34 +145,23 @@ func (c *Certificate) IsRoot() bool {
 
 // GenerateText generates a openssl "-text" representation of the certificate.
 func (c *Certificate) Text() string {
-	cert := c.X509Cert()
-	var builder strings.Builder
-
-	builder.WriteString("Certificate:\n")
-	builder.WriteString("    Data:\n")
-	builder.WriteString(fmt.Sprintf("        Version: %d\n", cert.Version))
-	builder.WriteString(fmt.Sprintf("        Serial Number: %s\n", cert.SerialNumber))
-	builder.WriteString("    Signature Algorithm: " + cert.SignatureAlgorithm.String() + "\n")
-	builder.WriteString("        Issuer: " + cert.Issuer.String() + "\n")
-	builder.WriteString("        Validity:\n")
-	builder.WriteString(fmt.Sprintf("            Not Before: %s\n", cert.NotBefore.Format("Jan 2 15:04:05 2006 MST")))
-	builder.WriteString(fmt.Sprintf("            Not After:  %s\n", cert.NotAfter.Format("Jan 2 15:04:05 2006 MST")))
-	builder.WriteString("        Subject: " + cert.Subject.String() + "\n")
-
-	if cert.IsCA {
-		builder.WriteString("        CA: TRUE\n")
-	}
-
-	if len(cert.DNSNames) > 0 {
-		builder.WriteString("        Subject Alternative Name:\n")
-		for _, dns := range cert.DNSNames {
-			builder.WriteString(fmt.Sprintf("            DNS:%s\n", dns))
+	path, err := exec.LookPath("openssl")
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		var stdout bytes.Buffer
+		cmd := exec.Command(path, "x509", "-text")
+		cmd.Stdin = strings.NewReader(c.PEMData)
+		cmd.Stdout = &stdout
+		err = cmd.Run()
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			return strings.TrimSpace(string(stdout.Bytes()))
 		}
 	}
 
-	builder.WriteString("\n" + c.PEMData)
-
-	return builder.String()
+	return strings.TrimSpace(c.PEMData)
 }
 
 func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
@@ -450,4 +442,67 @@ func calculatePublicKeyHash(privateKey PrivateKey) (string, error) {
 
 	hash := sha256.Sum256(publicKeyBytes)
 	return hex.EncodeToString(hash[:]), nil
+}
+
+func bigIntToHex(i *big.Int) string {
+	var parts []string
+	for _, b := range i.Bytes() {
+		parts = append(parts, fmt.Sprintf("%02x", b))
+	}
+	return strings.Join(parts, ":")
+}
+
+func bytesToHex(b []byte) string {
+	var parts []string
+	for _, b := range b {
+		parts = append(parts, fmt.Sprintf("%02x", b))
+	}
+	return strings.Join(parts, ":")
+}
+
+func marshalPublicKey(pub any) string {
+	var output strings.Builder
+	switch pub := pub.(type) {
+	case *rsa.PublicKey:
+		output.WriteString(fmt.Sprintf("Public-Key: (%d bit)\n", pub.Size()))
+		output.WriteString("Modulus:\n")
+		output.WriteString(pub.N.Text(16))
+		output.WriteString(fmt.Sprintf("Exponent: %d", pub.E))
+	case *ecdsa.PublicKey:
+		output.WriteString(fmt.Sprintf("Public-Key: (%d bit)\n", pub.Params().BitSize))
+		output.WriteString("pub:\n")
+		output.WriteString(wrap(bigIntToHex(pub.X)+":"+bigIntToHex(pub.Y), 42, 4))
+		output.WriteString("\n")
+		output.WriteString(fmt.Sprintf("NIST CURVE: %s", pub.Params().Name))
+	case ed25519.PublicKey:
+		output.WriteString(fmt.Sprintf("Public-Key: (%d bit)\n", len(pub)*8))
+		output.WriteString("pub:\n")
+		output.WriteString(bytesToHex(pub))
+	case *ecdh.PublicKey:
+		keyBytes := pub.Bytes()
+		output.WriteString(fmt.Sprintf("Public-Key: (%d bit)\n", len(keyBytes)*8))
+		output.WriteString("pub:\n")
+		output.WriteString(bytesToHex(keyBytes))
+	default:
+		output.WriteString(fmt.Sprintf("%v", pub))
+	}
+
+	return output.String()
+}
+
+func wrap(text string, width, indent int) string {
+	prefix := strings.Repeat(" ", indent)
+
+	var elems []string
+	for _, line := range strings.Split(text, "\n") {
+		for {
+			if len(line) <= width {
+				elems = append(elems, prefix+line)
+				break
+			}
+			elems = append(elems, prefix+line[:width])
+			line = line[width:]
+		}
+	}
+	return strings.Join(elems, "\n")
 }
