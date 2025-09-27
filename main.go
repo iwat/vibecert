@@ -229,16 +229,22 @@ func getDefaultDatabasePath() string {
 
 func (cli *CLI) runTreeCommand(ctx context.Context) {
 	tree := cli.app.BuildCertificateTree(ctx)
-	cli.printCertificateTree(tree, 0)
+	cli.printCertificateTree(tree, "")
 }
 
-func (cli *CLI) printCertificateTree(certificates []*application.CertificateNode, indent int) {
-	indentStr := strings.Repeat("  ", indent)
+func (cli *CLI) printCertificateTree(certs []*application.CertificateNode, prefix string) {
+	for i, cert := range certs {
+		isLast := i == len(certs)-1
 
-	for i, cert := range certificates {
-		marker := "├─"
-		if indent == 0 || i == len(certificates)-1 {
+		var marker string
+		var extension string
+
+		if isLast {
 			marker = "└─"
+			extension = "  "
+		} else {
+			marker = "├─"
+			extension = "│ "
 		}
 
 		keyStatus := "No Key"
@@ -247,10 +253,11 @@ func (cli *CLI) printCertificateTree(certificates []*application.CertificateNode
 		}
 
 		fmt.Printf("%s%s %s (id: %d) [%s]\n",
-			indentStr, marker, cert.Certificate.SubjectDN, cert.Certificate.ID, keyStatus)
+			prefix, marker, cert.Certificate.SubjectDN, cert.Certificate.ID, keyStatus)
 
 		if len(cert.Children) > 0 {
-			cli.printCertificateTree(cert.Children, indent+1)
+			newPrefix := prefix + extension
+			cli.printCertificateTree(cert.Children, newPrefix)
 		}
 	}
 }
