@@ -34,7 +34,7 @@ func keyListCmd(appBuilder *AppBuilder) *cobra.Command {
 			}
 
 			for _, k := range keyInfos {
-				fmt.Printf("%d) %s (%s, %d bits)\n",
+				fmt.Printf("(key id: %d) %s (%s, %d bits)\n",
 					k.KeyPair.ID, k.KeyPair.PublicKeyHash, k.KeyPair.KeyType, k.KeyPair.KeySize)
 				for _, cert := range k.Certificates {
 					fmt.Printf("  (cert id: %d) %s\n", cert.ID, cert.SubjectDN)
