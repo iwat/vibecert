@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"encoding/pem"
-	"sort"
 
 	"github.com/iwat/vibecert/internal/domain"
 )
@@ -47,12 +46,6 @@ func (app *App) BuildCertificateTree(ctx context.Context) []*CertificateNode {
 				roots = append(roots, node)
 			}
 		}
-	}
-
-	// Sort certificates
-	sortCertificates(roots)
-	for _, cert := range nodes {
-		sortCertificates(cert.Children)
 	}
 
 	return roots
@@ -100,10 +93,4 @@ func (app *App) ImportCertificates(ctx context.Context, filename string) ([]*dom
 		return nil, err
 	}
 	return importedCerts, nil
-}
-
-func sortCertificates(certificates []*CertificateNode) {
-	sort.Slice(certificates, func(i, j int) bool {
-		return certificates[i].Certificate.SubjectDN < certificates[j].Certificate.SubjectDN
-	})
 }
