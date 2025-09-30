@@ -214,12 +214,12 @@ func printCertificateTree(certs []*application.CertificateNode, prefix string) {
 			extension = "│ "
 		}
 
-		keyStatus := "(no key)"
+		keyStatus := "(🫥)"
 		if cert.KeyPair != nil {
-			keyStatus = fmt.Sprintf("(key id: %d)", cert.KeyPair.ID)
+			keyStatus = fmt.Sprintf("(🔑 %d)", cert.KeyPair.ID)
 		}
 
-		fmt.Printf("%s%s (cert id: %d) %s %s\n",
+		fmt.Printf("%s%s (📜 %d) %s %s\n",
 			prefix, marker, cert.Certificate.ID, cert.Certificate.SubjectDN, keyStatus)
 
 		if len(cert.Children) > 0 {
