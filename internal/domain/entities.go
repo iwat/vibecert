@@ -12,7 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -115,8 +115,8 @@ func CertificateFromPEM(block *pem.Block) (*Certificate, error) {
 		NotBefore:          x509Cert.NotBefore,
 		NotAfter:           x509Cert.NotAfter,
 		SignatureAlgorithm: x509Cert.SignatureAlgorithm.String(),
-		SubjectKeyID:       hex.EncodeToString(x509Cert.SubjectKeyId),
-		AuthorityKeyID:     hex.EncodeToString(x509Cert.AuthorityKeyId),
+		SubjectKeyID:       bytesToHex(x509Cert.SubjectKeyId),
+		AuthorityKeyID:     bytesToHex(x509Cert.AuthorityKeyId),
 		IsCA:               x509Cert.IsCA,
 		PEMData:            string(pem.EncodeToMemory(block)),
 		PublicKeyHash:      calculatePublicKeyHashFromX509Cert(x509Cert),
@@ -166,7 +166,7 @@ func (c *Certificate) Text() string {
 
 func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
 	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	return hex.EncodeToString(hash[:])
+	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
 // KeyPair represents a private key with its hash
@@ -441,7 +441,7 @@ func calculatePublicKeyHash(privateKey PrivateKey) (string, error) {
 	}
 
 	hash := sha256.Sum256(publicKeyBytes)
-	return hex.EncodeToString(hash[:]), nil
+	return base64.RawURLEncoding.EncodeToString(hash[:]), nil
 }
 
 func bigIntToHex(i *big.Int) string {

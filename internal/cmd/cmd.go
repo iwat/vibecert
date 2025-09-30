@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -55,7 +56,8 @@ func (b *AppBuilder) Build() error {
 	return nil
 }
 
-func (b *AppBuilder) App() *application.App {
+func (b *AppBuilder) App(ctx context.Context) *application.App {
+	b.app.Initialize(ctx)
 	return b.app
 }
 

@@ -33,7 +33,7 @@ func certificateTreeCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Display certificate dependency tree",
 		Long:  "Display certificate dependency tree",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tree := appBuilder.App().BuildCertificateTree(cmd.Context())
+			tree := appBuilder.App(cmd.Context()).BuildCertificateTree(cmd.Context())
 			printCertificateTree(tree, "")
 			return nil
 		},
@@ -55,7 +55,7 @@ func certificateImportCmd(appBuilder *AppBuilder) *cobra.Command {
 			} else {
 				file = args[0]
 			}
-			importedCerts, err := appBuilder.App().ImportCertificates(cmd.Context(), file)
+			importedCerts, err := appBuilder.App(cmd.Context()).ImportCertificates(cmd.Context(), file)
 			if err != nil {
 				return err
 			}
@@ -78,7 +78,7 @@ func certificateExportCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Export a certificate",
 		Long:  "Export a certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pem, err := appBuilder.App().ExportCertificate(cmd.Context(), id)
+			pem, err := appBuilder.App(cmd.Context()).ExportCertificate(cmd.Context(), id)
 			if err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ func certificateDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Delete a certificate and its dedicated private key",
 		Long:  "Delete a certificate and its dedicated private key",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := appBuilder.App().DeleteCertificate(cmd.Context(), id, force)
+			result, err := appBuilder.App(cmd.Context()).DeleteCertificate(cmd.Context(), id, force)
 			if err != nil {
 				log.Fatalf("Failed to delete certificate: %v", err)
 			}
@@ -128,7 +128,7 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Create a root certificate",
 		Long:  "Create a root certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cert, _, err := appBuilder.App().CreateCA(cmd.Context(), &application.CreateCARequest{
+			cert, _, err := appBuilder.App(cmd.Context()).CreateCA(cmd.Context(), &application.CreateCARequest{
 				CommonName: commonName,
 				KeySize:    rsaKeySize,
 				ValidDays:  validDays,
@@ -188,7 +188,7 @@ func certificateExportPKCS12Cmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Export a certificate and its private key as PKCS#12",
 		Long:  "Export a certificate and its private key as PKCS#12",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return appBuilder.App().ExportCertificateWithKeyToPKCS12(cmd.Context(), id, outputFile)
+			return appBuilder.App(cmd.Context()).ExportCertificateWithKeyToPKCS12(cmd.Context(), id, outputFile)
 		},
 	}
 	exportPKCS12Cmd.Flags().IntVar(&id, "id", -1, "Certificate ID")
