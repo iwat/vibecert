@@ -13,12 +13,38 @@ func keyCmd(appBuilder *AppBuilder) *cobra.Command {
 		Long:  "Manage private keys",
 	}
 
+	keyCmd.AddCommand(keyListCmd(appBuilder))
 	keyCmd.AddCommand(keyImportCmd(appBuilder))
 	keyCmd.AddCommand(keyExportCmd(appBuilder))
 	keyCmd.AddCommand(keyReencryptCmd(appBuilder))
 	keyCmd.AddCommand(keyDeleteCmd(appBuilder))
 
 	return keyCmd
+}
+
+func keyListCmd(appBuilder *AppBuilder) *cobra.Command {
+	importCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List private keys",
+		Long:  "List private keys",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			keyInfos, err := appBuilder.App().ListKeys(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			for _, k := range keyInfos {
+				fmt.Printf("%d) %s (%s, %d bits)\n",
+					k.KeyPair.ID, k.KeyPair.PublicKeyHash, k.KeyPair.KeyType, k.KeyPair.KeySize)
+				for _, cert := range k.Certificates {
+					fmt.Printf("  (cert id: %d) %s\n", cert.ID, cert.SubjectDN)
+				}
+			}
+			return nil
+		},
+	}
+
+	return importCmd
 }
 
 func keyImportCmd(appBuilder *AppBuilder) *cobra.Command {

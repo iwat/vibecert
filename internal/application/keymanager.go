@@ -10,6 +10,32 @@ import (
 	"github.com/iwat/vibecert/internal/domain"
 )
 
+type KeyInfo struct {
+	KeyPair      *domain.KeyPair
+	Certificates []*domain.Certificate
+}
+
+func (app *App) ListKeys(ctx context.Context) ([]KeyInfo, error) {
+	keys, err := app.db.AllKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list keys: %v", err)
+	}
+	var keyInfos []KeyInfo
+	for _, key := range keys {
+		certs, err := app.db.CertificatesByPublicKeyHash(ctx, key.PublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get certificates by public key hash: %v", err)
+		}
+		keyInfo := KeyInfo{
+			KeyPair:      key,
+			Certificates: certs,
+		}
+		keyInfos = append(keyInfos, keyInfo)
+	}
+
+	return keyInfos, nil
+}
+
 // ImportKey imports a private key, calculating its hash from the key itself
 func (app *App) ImportKeys(ctx context.Context, filename string) ([]*domain.KeyPair, error) {
 	pemBytes, err := app.fileReader.ReadFile(filename)

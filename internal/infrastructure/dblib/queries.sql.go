@@ -153,7 +153,7 @@ func (q *Queries) CertificatesByIssuerAndAuthorityKeyID(ctx context.Context, iss
 	return items, nil
 }
 
-const certificateByPublicKeyHash = `-- name: CertificateByPublicKeyHash :many
+const certificatesByPublicKeyHash = `-- name: CertificatesByPublicKeyHash :many
 SELECT
     id, serial_number, subject_dn, issuer_dn, not_before, not_after,
     signature_algo, subject_key_id, authority_key_id,
@@ -162,8 +162,8 @@ FROM certificate
 WHERE public_key_hash = ?
 `
 
-func (q *Queries) CertificateByPublicKeyHash(ctx context.Context, publicKeyHash string) ([]*domain.Certificate, error) {
-	rows, err := q.db.QueryContext(ctx, certificateByPublicKeyHash, publicKeyHash)
+func (q *Queries) CertificatesByPublicKeyHash(ctx context.Context, publicKeyHash string) ([]*domain.Certificate, error) {
+	rows, err := q.db.QueryContext(ctx, certificatesByPublicKeyHash, publicKeyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +300,41 @@ func (q *Queries) KeyByPublicKeyHash(ctx context.Context, publicKeyHash string) 
 		&i.PEMData,
 	)
 	return &i, err
+}
+
+const allKeys = `-- name: AllKeys :many
+SELECT
+    id, public_key_hash, key_type, key_size, pem_data
+FROM key
+`
+
+func (q *Queries) AllKeys(ctx context.Context) ([]*domain.KeyPair, error) {
+	rows, err := q.db.QueryContext(ctx, allKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*domain.KeyPair
+	for rows.Next() {
+		var i domain.KeyPair
+		if err := rows.Scan(
+			&i.ID,
+			&i.PublicKeyHash,
+			&i.KeyType,
+			&i.KeySize,
+			&i.PEMData,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateKeyPEM = `-- name: UpdateKeyPEM :exec

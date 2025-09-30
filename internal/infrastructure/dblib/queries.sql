@@ -32,7 +32,7 @@ SELECT
 FROM certificate
 WHERE issuer_dn = ? AND authority_key_id = ?;
 
--- name: CertificateByPublicKeyHash :many
+-- name: CertificatesByPublicKeyHash :many
 SELECT
     id, serial_number, subject_dn, issuer_dn, not_before, not_after,
     signature_algo, subject_key_id, authority_key_id,
@@ -67,6 +67,11 @@ SELECT
     id, public_key_hash, key_type, key_size, pem_data
 FROM key
 WHERE public_key_hash = ?;
+
+-- name: AllKeys :many
+SELECT
+    id, public_key_hash, key_type, key_size, pem_data
+FROM key;
 
 -- name: UpdateKeyPEM :exec
 UPDATE key SET pem_data = ? WHERE id = ?;
