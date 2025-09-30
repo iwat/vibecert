@@ -37,6 +37,10 @@ type CreateCARequest struct {
 	ValidDays  int
 }
 
+func (app *App) Initialize(ctx context.Context) error {
+	return app.db.InitializeDatabase(ctx)
+}
+
 func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Certificate, *domain.KeyPair, error) {
 	var issuerPrivateKey domain.PrivateKey
 	if req.IssuerCA != nil {
