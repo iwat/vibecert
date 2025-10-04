@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/iwat/vibecert/internal/application"
 	"github.com/spf13/cobra"
@@ -218,6 +219,7 @@ func printCertificateTree(certs []*application.CertificateNode, prefix string) {
 
 		var marker string
 		var extension string
+		var prefix2 string
 
 		if isLast {
 			marker = "└─"
@@ -227,13 +229,21 @@ func printCertificateTree(certs []*application.CertificateNode, prefix string) {
 			extension = "│ "
 		}
 
-		keyStatus := "(🫥)"
-		if cert.KeyPair != nil {
-			keyStatus = fmt.Sprintf("(🔑 %d)", cert.KeyPair.ID)
+		if len(cert.Children) > 0 {
+			prefix2 = "│ "
+		} else {
+			prefix2 = "  "
 		}
 
-		fmt.Printf("%s%s (📜 %d) %s %s\n",
-			prefix, marker, cert.Certificate.ID, cert.Certificate.SubjectDN, keyStatus)
+		idLength := len(fmt.Sprintf("%d", cert.Certificate.ID)) + 5
+		fmt.Printf("%s%s (📜 %d) %s\n",
+			prefix, marker, cert.Certificate.ID, cert.Certificate.SubjectDN)
+		fmt.Printf("%s%s%s%s🔢 %s\n",
+			prefix, extension, prefix2, strings.Repeat(" ", idLength), cert.Certificate.SerialNumber)
+		if cert.KeyPair != nil {
+			fmt.Printf("%s%s%s%s(🔑 %d) %s (%s, %d bits)\n",
+				prefix, extension, prefix2, strings.Repeat(" ", idLength), cert.KeyPair.ID, cert.KeyPair.PublicKeyHash, cert.KeyPair.KeyType, cert.KeyPair.KeySize)
+		}
 
 		if len(cert.Children) > 0 {
 			newPrefix := prefix + extension
