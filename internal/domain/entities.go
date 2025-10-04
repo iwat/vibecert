@@ -185,6 +185,10 @@ func (c *Certificate) Text() string {
 	return strings.TrimSpace(c.PEMData)
 }
 
+func (c *Certificate) String() string {
+	return fmt.Sprintf("(📜 %d) %s 🔢 %s...", c.ID, c.SubjectDN, c.SerialNumber[:12])
+}
+
 func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
 	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 	return base64.RawURLEncoding.EncodeToString(hash[:])
@@ -373,6 +377,10 @@ func (k *KeyPair) Block() *pem.Block {
 		k.block = block
 	}
 	return k.block
+}
+
+func (k *KeyPair) String() string {
+	return fmt.Sprintf("(🔑 %d) %s (%s, %d bits)", k.ID, k.PublicKeyHash, k.KeyType, k.KeySize)
 }
 
 func encryptPrivateKey(privateKey PrivateKey, password []byte) (string, error) {
