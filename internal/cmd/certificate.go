@@ -119,9 +119,14 @@ func certificateDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 
 func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 	var (
-		commonName string
-		validDays  int
-		rsaKeySize int
+		commonName             string
+		countryName            string
+		stateName              string
+		localityName           string
+		organizationName       string
+		organizationalUnitName string
+		validDays              int
+		rsaKeySize             int
 	)
 	createRootCmd := &cobra.Command{
 		Use:   "create-root",
@@ -129,24 +134,32 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 		Long:  "Create a root certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cert, _, err := appBuilder.App(cmd.Context()).CreateCA(cmd.Context(), &application.CreateCARequest{
-				CommonName: commonName,
-				KeySize:    rsaKeySize,
-				ValidDays:  validDays,
+				CommonName:             commonName,
+				CountryName:            countryName,
+				StateName:              stateName,
+				LocalityName:           localityName,
+				OrganizationName:       organizationName,
+				OrganizationalUnitName: organizationalUnitName,
+				KeySize:                rsaKeySize,
+				ValidDays:              validDays,
 			})
 			if err != nil {
 				return err
 			}
 
 			fmt.Printf("Root CA certificate generated successfully:\n")
-			fmt.Printf("  ID: %d\n", cert.ID)
-			fmt.Printf("  Serial: %s\n", cert.SerialNumber)
+			fmt.Printf("  (📜 %d) %s (%s)\n", cert.ID, cert.SubjectDN, cert.SerialNumber)
 			return nil
 		},
 	}
 	createRootCmd.Flags().StringVar(&commonName, "cn", "", "Common Name")
 	createRootCmd.MarkFlagRequired("cn")
+	createRootCmd.Flags().StringVar(&countryName, "dn-c", "", "Country Name (optional)")
+	createRootCmd.Flags().StringVar(&stateName, "dn-st", "", "State or Province Name (optional)")
+	createRootCmd.Flags().StringVar(&localityName, "dn-l", "", "Locality Name (optional)") // City
+	createRootCmd.Flags().StringVar(&organizationName, "dn-o", "", "Organization Name (optional)")
+	createRootCmd.Flags().StringVar(&organizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
 	createRootCmd.Flags().IntVar(&validDays, "valid-days", 3650, "Certificate validity in days")
-	createRootCmd.MarkFlagRequired("valid-days")
 	createRootCmd.Flags().IntVar(&rsaKeySize, "rsa-key-size", 4096, "RSA key size in bits")
 
 	return createRootCmd

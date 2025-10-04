@@ -31,10 +31,15 @@ func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileRea
 
 // CreateCARequest provides a request to create a new root CA certificate
 type CreateCARequest struct {
-	IssuerCA   *domain.Certificate
-	CommonName string
-	KeySize    int
-	ValidDays  int
+	IssuerCA               *domain.Certificate
+	CommonName             string
+	CountryName            string
+	StateName              string
+	LocalityName           string
+	OrganizationName       string
+	OrganizationalUnitName string
+	KeySize                int
+	ValidDays              int
 }
 
 func (app *App) Initialize(ctx context.Context) error {
@@ -77,12 +82,17 @@ func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Cer
 	}
 
 	certificate, err := domain.NewCertificate(&domain.CreateCertificateRequest{
-		IssuerCertificate: req.IssuerCA,
-		IssuerPrivateKey:  issuerPrivateKey,
-		CommonName:        req.CommonName,
-		ValidDays:         req.ValidDays,
-		IsCA:              true,
-		PublicKey:         privateKey.Public(),
+		IssuerCertificate:      req.IssuerCA,
+		IssuerPrivateKey:       issuerPrivateKey,
+		CommonName:             req.CommonName,
+		CountryName:            req.CountryName,
+		StateName:              req.StateName,
+		LocalityName:           req.LocalityName,
+		OrganizationName:       req.OrganizationName,
+		OrganizationalUnitName: req.OrganizationalUnitName,
+		ValidDays:              req.ValidDays,
+		IsCA:                   true,
+		PublicKey:              privateKey.Public(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)

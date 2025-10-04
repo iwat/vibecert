@@ -41,17 +41,38 @@ type Certificate struct {
 
 // CreateCertificateRequest provides a request to create a new certificate
 type CreateCertificateRequest struct {
-	IssuerCertificate *Certificate
-	IssuerPrivateKey  crypto.PrivateKey
-	CommonName        string
-	ValidDays         int
-	IsCA              bool
-	PublicKey         crypto.PublicKey
+	IssuerCertificate      *Certificate
+	IssuerPrivateKey       crypto.PrivateKey
+	CommonName             string
+	CountryName            string
+	StateName              string
+	LocalityName           string
+	OrganizationName       string
+	OrganizationalUnitName string
+	ValidDays              int
+	IsCA                   bool
+	PublicKey              crypto.PublicKey
 }
 
 func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
+	subject := pkix.Name{CommonName: req.CommonName}
+	if req.CountryName != "" {
+		subject.Country = []string{req.CountryName}
+	}
+	if req.StateName != "" {
+		subject.Province = []string{req.StateName}
+	}
+	if req.LocalityName != "" {
+		subject.Locality = []string{req.LocalityName}
+	}
+	if req.OrganizationName != "" {
+		subject.Organization = []string{req.OrganizationName}
+	}
+	if req.OrganizationalUnitName != "" {
+		subject.OrganizationalUnit = []string{req.OrganizationalUnitName}
+	}
 	template := x509.Certificate{
-		Subject:               pkix.Name{CommonName: req.CommonName},
+		Subject:               subject,
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(0, 0, req.ValidDays),
 		BasicConstraintsValid: true,
@@ -109,7 +130,7 @@ func CertificateFromPEM(block *pem.Block) (*Certificate, error) {
 
 	cert := &Certificate{
 		ID:                 -1,
-		SerialNumber:       x509Cert.SerialNumber.String(),
+		SerialNumber:       bigIntToHex(x509Cert.SerialNumber),
 		SubjectDN:          x509Cert.Subject.String(),
 		IssuerDN:           x509Cert.Issuer.String(),
 		NotBefore:          x509Cert.NotBefore,
