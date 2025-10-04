@@ -31,7 +31,7 @@ func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileRea
 
 // CreateCARequest provides a request to create a new root CA certificate
 type CreateCARequest struct {
-	IssuerCA               *domain.Certificate
+	IssuerID               int
 	CommonName             string
 	CountryName            string
 	StateName              string
@@ -48,8 +48,15 @@ func (app *App) Initialize(ctx context.Context) error {
 
 func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Certificate, *domain.KeyPair, error) {
 	var issuerPrivateKey domain.PrivateKey
-	if req.IssuerCA != nil {
-		issuerKeyPair, err := app.db.KeyByPublicKeyHash(ctx, req.IssuerCA.PublicKeyHash)
+	var issuerCA *domain.Certificate
+	if req.IssuerID > 0 {
+		var err error
+		issuerCA, err = app.db.CertificateByID(ctx, req.IssuerID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to retrieve issuer certificate: %v", err)
+		}
+
+		issuerKeyPair, err := app.db.KeyByPublicKeyHash(ctx, issuerCA.PublicKeyHash)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
 		}
@@ -63,7 +70,7 @@ func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Cer
 		}
 	}
 
-	newPassword, err := app.askPasswordWithConfirmation("new password")
+	newPassword, err := app.askPasswordWithConfirmation("password for the new CA")
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
 	}
@@ -82,7 +89,7 @@ func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Cer
 	}
 
 	certificate, err := domain.NewCertificate(&domain.CreateCertificateRequest{
-		IssuerCertificate:      req.IssuerCA,
+		IssuerCertificate:      issuerCA,
 		IssuerPrivateKey:       issuerPrivateKey,
 		CommonName:             req.CommonName,
 		CountryName:            req.CountryName,

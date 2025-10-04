@@ -167,14 +167,53 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 }
 
 func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
+	var (
+		issuerID               int
+		commonName             string
+		countryName            string
+		stateName              string
+		localityName           string
+		organizationName       string
+		organizationalUnitName string
+		validDays              int
+		rsaKeySize             int
+	)
 	createIntermediateCmd := &cobra.Command{
 		Use:   "create-intermediate",
 		Short: "Create an intermediate certificate",
 		Long:  "Create an intermediate certificate",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cert, _, err := appBuilder.App(cmd.Context()).CreateCA(cmd.Context(), &application.CreateCARequest{
+				IssuerID:               issuerID,
+				CommonName:             commonName,
+				CountryName:            countryName,
+				StateName:              stateName,
+				LocalityName:           localityName,
+				OrganizationName:       organizationName,
+				OrganizationalUnitName: organizationalUnitName,
+				KeySize:                rsaKeySize,
+				ValidDays:              validDays,
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Root CA certificate generated successfully:\n")
+			fmt.Printf("  (📜 %d) %s (%s)\n", cert.ID, cert.SubjectDN, cert.SerialNumber)
+			return nil
 		},
 	}
+	createIntermediateCmd.Flags().IntVar(&issuerID, "issuer-id", 0, "Issuer certificate ID")
+	createIntermediateCmd.MarkFlagRequired("issuer-id")
+	createIntermediateCmd.Flags().StringVar(&commonName, "cn", "", "Common Name")
+	createIntermediateCmd.MarkFlagRequired("cn")
+	createIntermediateCmd.Flags().StringVar(&countryName, "dn-c", "", "Country Name (optional)")
+	createIntermediateCmd.Flags().StringVar(&stateName, "dn-st", "", "State or Province Name (optional)")
+	createIntermediateCmd.Flags().StringVar(&localityName, "dn-l", "", "Locality Name (optional)") // City
+	createIntermediateCmd.Flags().StringVar(&organizationName, "dn-o", "", "Organization Name (optional)")
+	createIntermediateCmd.Flags().StringVar(&organizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
+	createIntermediateCmd.Flags().IntVar(&validDays, "valid-days", 1825, "Certificate validity in days")
+	createIntermediateCmd.Flags().IntVar(&rsaKeySize, "rsa-key-size", 3072, "RSA key size in bits")
 
 	return createIntermediateCmd
 }
