@@ -118,32 +118,31 @@ func certificateDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 	return deleteCmd
 }
 
+func setupFlagsForCreateCertificateParams(cmd *cobra.Command, params *application.CreateCertificateRequest) error {
+	cmd.Flags().StringVar(&params.CommonName, "cn", "", "Common Name")
+	cmd.MarkFlagRequired("cn")
+	cmd.Flags().StringVar(&params.CountryName, "dn-c", "", "Country Name (optional)")
+	cmd.Flags().StringVar(&params.StateName, "dn-st", "", "State or Province Name (optional)")
+	cmd.Flags().StringVar(&params.LocalityName, "dn-l", "", "Locality Name (optional)") // City
+	cmd.Flags().StringVar(&params.OrganizationName, "dn-o", "", "Organization Name (optional)")
+	cmd.Flags().StringVar(&params.OrganizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
+	cmd.Flags().IntVar(&params.ValidDays, "valid-days", params.ValidDays, "Certificate validity in days")
+	cmd.Flags().IntVar(&params.KeySize, "rsa-key-size", params.KeySize, "RSA key size in bits")
+	return nil
+}
+
 func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
-	var (
-		commonName             string
-		countryName            string
-		stateName              string
-		localityName           string
-		organizationName       string
-		organizationalUnitName string
-		validDays              int
-		rsaKeySize             int
-	)
+	request := application.CreateCertificateRequest{
+		ValidDays: 365 * 10,
+		KeySize:   4096,
+		IsCA:      true,
+	}
 	createRootCmd := &cobra.Command{
 		Use:   "create-root",
 		Short: "Create a root certificate",
 		Long:  "Create a root certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cert, _, err := appBuilder.App(cmd.Context()).CreateCA(cmd.Context(), &application.CreateCARequest{
-				CommonName:             commonName,
-				CountryName:            countryName,
-				StateName:              stateName,
-				LocalityName:           localityName,
-				OrganizationName:       organizationName,
-				OrganizationalUnitName: organizationalUnitName,
-				KeySize:                rsaKeySize,
-				ValidDays:              validDays,
-			})
+			cert, _, err := appBuilder.App(cmd.Context()).CreateCertificate(cmd.Context(), &request)
 			if err != nil {
 				return err
 			}
@@ -153,80 +152,62 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 			return nil
 		},
 	}
-	createRootCmd.Flags().StringVar(&commonName, "cn", "", "Common Name")
-	createRootCmd.MarkFlagRequired("cn")
-	createRootCmd.Flags().StringVar(&countryName, "dn-c", "", "Country Name (optional)")
-	createRootCmd.Flags().StringVar(&stateName, "dn-st", "", "State or Province Name (optional)")
-	createRootCmd.Flags().StringVar(&localityName, "dn-l", "", "Locality Name (optional)") // City
-	createRootCmd.Flags().StringVar(&organizationName, "dn-o", "", "Organization Name (optional)")
-	createRootCmd.Flags().StringVar(&organizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
-	createRootCmd.Flags().IntVar(&validDays, "valid-days", 3650, "Certificate validity in days")
-	createRootCmd.Flags().IntVar(&rsaKeySize, "rsa-key-size", 4096, "RSA key size in bits")
+	setupFlagsForCreateCertificateParams(createRootCmd, &request)
 
 	return createRootCmd
 }
 
 func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
-	var (
-		issuerID               int
-		commonName             string
-		countryName            string
-		stateName              string
-		localityName           string
-		organizationName       string
-		organizationalUnitName string
-		validDays              int
-		rsaKeySize             int
-	)
+	request := application.CreateCertificateRequest{
+		ValidDays: 365 * 5,
+		KeySize:   3072,
+		IsCA:      true,
+	}
 	createIntermediateCmd := &cobra.Command{
 		Use:   "create-intermediate",
 		Short: "Create an intermediate certificate",
 		Long:  "Create an intermediate certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cert, _, err := appBuilder.App(cmd.Context()).CreateCA(cmd.Context(), &application.CreateCARequest{
-				IssuerID:               issuerID,
-				CommonName:             commonName,
-				CountryName:            countryName,
-				StateName:              stateName,
-				LocalityName:           localityName,
-				OrganizationName:       organizationName,
-				OrganizationalUnitName: organizationalUnitName,
-				KeySize:                rsaKeySize,
-				ValidDays:              validDays,
-			})
+			cert, _, err := appBuilder.App(cmd.Context()).CreateCertificate(cmd.Context(), &request)
 			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Root CA certificate generated successfully:\n")
+			fmt.Printf("Intermediate CA certificate generated successfully:\n")
 			fmt.Printf("  (📜 %d) %s (%s)\n", cert.ID, cert.SubjectDN, cert.SerialNumber)
 			return nil
 		},
 	}
-	createIntermediateCmd.Flags().IntVar(&issuerID, "issuer-id", 0, "Issuer certificate ID")
+	createIntermediateCmd.Flags().IntVar(&request.IssuerID, "issuer-id", 0, "Issuer certificate ID")
 	createIntermediateCmd.MarkFlagRequired("issuer-id")
-	createIntermediateCmd.Flags().StringVar(&commonName, "cn", "", "Common Name")
-	createIntermediateCmd.MarkFlagRequired("cn")
-	createIntermediateCmd.Flags().StringVar(&countryName, "dn-c", "", "Country Name (optional)")
-	createIntermediateCmd.Flags().StringVar(&stateName, "dn-st", "", "State or Province Name (optional)")
-	createIntermediateCmd.Flags().StringVar(&localityName, "dn-l", "", "Locality Name (optional)") // City
-	createIntermediateCmd.Flags().StringVar(&organizationName, "dn-o", "", "Organization Name (optional)")
-	createIntermediateCmd.Flags().StringVar(&organizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
-	createIntermediateCmd.Flags().IntVar(&validDays, "valid-days", 1825, "Certificate validity in days")
-	createIntermediateCmd.Flags().IntVar(&rsaKeySize, "rsa-key-size", 3072, "RSA key size in bits")
+	setupFlagsForCreateCertificateParams(createIntermediateCmd, &request)
 
 	return createIntermediateCmd
 }
 
 func certificateCreateLeafCmd(appBuilder *AppBuilder) *cobra.Command {
+	request := application.CreateCertificateRequest{
+		ValidDays: 365 * 3,
+		KeySize:   2048,
+	}
 	createLeafCmd := &cobra.Command{
 		Use:   "create-leaf",
 		Short: "Create a leaf certificate",
 		Long:  "Create a leaf certificate",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cert, _, err := appBuilder.App(cmd.Context()).CreateCertificate(cmd.Context(), &request)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Leaf certificate generated successfully:\n")
+			fmt.Printf("  (📜 %d) %s (%s)\n", cert.ID, cert.SubjectDN, cert.SerialNumber)
+			return nil
 		},
 	}
+	createLeafCmd.Flags().IntVar(&request.IssuerID, "issuer-id", 0, "Issuer certificate ID")
+	createLeafCmd.MarkFlagRequired("issuer-id")
+	setupFlagsForCreateCertificateParams(createLeafCmd, &request)
 
 	return createLeafCmd
 }

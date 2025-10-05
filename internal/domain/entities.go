@@ -76,7 +76,7 @@ func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(0, 0, req.ValidDays),
 		BasicConstraintsValid: true,
-		IsCA:                  true,
+		IsCA:                  req.IsCA,
 	}
 	if req.IsCA {
 		template.KeyUsage = x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign
@@ -84,7 +84,6 @@ func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
 	} else {
 		template.KeyUsage = x509.KeyUsageDataEncipherment | x509.KeyUsageDigitalSignature
 		template.ExtKeyUsage = []x509.ExtKeyUsage{
-			x509.ExtKeyUsageOCSPSigning,
 			x509.ExtKeyUsageServerAuth,
 			x509.ExtKeyUsageClientAuth,
 			x509.ExtKeyUsageCodeSigning,

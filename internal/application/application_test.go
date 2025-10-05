@@ -18,8 +18,8 @@ func TestCreateRootCA(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "secret"}
-	cert, keyPair, err := app.CreateCA(t.Context(), &CreateCARequest{
-		IssuerCA:   nil,
+	cert, keyPair, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+		IssuerID:   SelfSignedIssuerID,
 		CommonName: "test",
 		KeySize:    2048,
 		ValidDays:  3650,
@@ -42,16 +42,16 @@ func TestCreateIntermediateCA(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"root-secret", "root-secret"}
-	rootCert, _, err := app.CreateCA(t.Context(), &CreateCARequest{
-		IssuerCA:   nil,
+	rootCert, _, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+		IssuerID:   SelfSignedIssuerID,
 		CommonName: "test root",
 		KeySize:    2048,
 		ValidDays:  3650,
 	})
 
 	passwordReader.passwords = []string{"root-secret", "intermediate-secret", "intermediate-secret"}
-	cert, keyPair, err := app.CreateCA(t.Context(), &CreateCARequest{
-		IssuerCA:   rootCert,
+	cert, keyPair, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+		IssuerID:   rootCert.ID,
 		CommonName: "test intermediate",
 		KeySize:    2048,
 		ValidDays:  3650,

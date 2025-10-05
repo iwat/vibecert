@@ -29,8 +29,8 @@ func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileRea
 	}
 }
 
-// CreateCARequest provides a request to create a new root CA certificate
-type CreateCARequest struct {
+// CreateCertificateRequest provides a request to create a new certificate
+type CreateCertificateRequest struct {
 	IssuerID               int
 	CommonName             string
 	CountryName            string
@@ -40,16 +40,19 @@ type CreateCARequest struct {
 	OrganizationalUnitName string
 	KeySize                int
 	ValidDays              int
+	IsCA                   bool
 }
+
+const SelfSignedIssuerID = -1
 
 func (app *App) Initialize(ctx context.Context) error {
 	return app.db.InitializeDatabase(ctx)
 }
 
-func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Certificate, *domain.KeyPair, error) {
+func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateRequest) (*domain.Certificate, *domain.KeyPair, error) {
 	var issuerPrivateKey domain.PrivateKey
 	var issuerCA *domain.Certificate
-	if req.IssuerID > 0 {
+	if req.IssuerID != SelfSignedIssuerID {
 		var err error
 		issuerCA, err = app.db.CertificateByID(ctx, req.IssuerID)
 		if err != nil {
@@ -98,7 +101,7 @@ func (app *App) CreateCA(ctx context.Context, req *CreateCARequest) (*domain.Cer
 		OrganizationName:       req.OrganizationName,
 		OrganizationalUnitName: req.OrganizationalUnitName,
 		ValidDays:              req.ValidDays,
-		IsCA:                   true,
+		IsCA:                   req.IsCA,
 		PublicKey:              privateKey.Public(),
 	})
 	if err != nil {
