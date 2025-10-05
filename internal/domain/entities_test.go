@@ -153,120 +153,120 @@ func TestCertificateFromPEM(t *testing.T) {
 	}
 
 	keyPEM := loadTestFile(t, "rsa_cert_key.pem")
-	key, _ := KeyPairFromUnencryptedPEM(keyPEM)
+	key, _ := KeyFromUnencryptedPEM(keyPEM)
 
 	if key.PublicKeyHash != cert.PublicKeyHash {
 		t.Errorf("key.PublicKeyHash != cert.PublicKeyHash")
 	}
 }
 
-func TestUnencryptedKeyPairFromUnencryptedPEM(t *testing.T) {
+func TestUnencryptedKeyFromUnencryptedPEM(t *testing.T) {
 	for _, keyFile := range unencryptedKeyFiles {
 		t.Run(keyFile, func(t *testing.T) {
 			keyPEM := loadTestFile(t, keyFile)
-			if _, err := KeyPairFromUnencryptedPEM(keyPEM); err != nil {
-				t.Errorf("Unencrypted via KeyPairFromUnencryptedPEM failed: %v", err)
+			if _, err := KeyFromUnencryptedPEM(keyPEM); err != nil {
+				t.Errorf("Unencrypted via KeyFromUnencryptedPEM failed: %v", err)
 			}
 		})
 	}
 }
 
-func TestUnencryptedKeyPairFromPEM(t *testing.T) {
+func TestUnencryptedKeyFromPEM(t *testing.T) {
 	for _, keyFile := range unencryptedKeyFiles {
 		t.Run(keyFile, func(t *testing.T) {
 			keyPEM := loadTestFile(t, keyFile)
-			if _, err := KeyPairFromPEM(keyPEM, nil); err != nil {
-				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			if _, err := KeyFromPEM(keyPEM, nil); err != nil {
+				t.Errorf("Unencrypted via KeyFromPEM failed: %v", err)
 			}
 		})
 	}
 }
 
-func TestEncryptedKeyPairFromPEM(t *testing.T) {
+func TestEncryptedKeyFromPEM(t *testing.T) {
 	for _, keyFile := range encryptedKeyFiles {
 		t.Run(keyFile, func(t *testing.T) {
 			keyPEM := loadTestFile(t, keyFile)
-			if _, err := KeyPairFromPEM(keyPEM, []byte("secret")); err != nil {
-				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			if _, err := KeyFromPEM(keyPEM, []byte("secret")); err != nil {
+				t.Errorf("Unencrypted via KeyFromPEM failed: %v", err)
 			}
 		})
 	}
 }
 
-func TestReencryptedKeyPairFromPEM(t *testing.T) {
+func TestReencryptedKeyFromPEM(t *testing.T) {
 	for _, keyFile := range encryptedKeyFiles {
 		t.Run(keyFile, func(t *testing.T) {
 			keyPEM := loadTestFile(t, keyFile)
-			var keyPair *KeyPair
+			var key *Key
 			var err error
-			if keyPair, err = KeyPairFromPEM(keyPEM, []byte("secret")); err != nil {
-				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			if key, err = KeyFromPEM(keyPEM, []byte("secret")); err != nil {
+				t.Errorf("Unencrypted via KeyFromPEM failed: %v", err)
 			}
-			err = keyPair.Reencrypt([]byte("secret"), []byte("newsecret"))
+			err = key.Reencrypt([]byte("secret"), []byte("newsecret"))
 			if err != nil {
 				t.Errorf("Reencryption failed: %v", err)
 			}
 
-			block, _ := pem.Decode([]byte(keyPair.PEMData))
-			if keyPair, err = KeyPairFromPEM(block, []byte("newsecret")); err != nil {
-				t.Errorf("Unencrypted via KeyPairFromPEM failed: %v", err)
+			block, _ := pem.Decode([]byte(key.PEMData))
+			if key, err = KeyFromPEM(block, []byte("newsecret")); err != nil {
+				t.Errorf("Unencrypted via KeyFromPEM failed: %v", err)
 			}
 		})
 	}
 }
 
-func TestNewRSAKeyPair(t *testing.T) {
-	key, err := NewRSAKeyPair(2048, nil)
+func TestNewRSAKey(t *testing.T) {
+	key, err := NewRSAKey(2048, nil)
 	if err != nil {
-		t.Errorf("NewRSAKeyPair failed: %v", err)
+		t.Errorf("NewRSAKey failed: %v", err)
 	}
 	if key == nil {
-		t.Errorf("NewRSAKeyPair returned nil")
+		t.Errorf("NewRSAKey returned nil")
 	}
 
-	key, err = NewRSAKeyPair(2048, []byte("secret"))
+	key, err = NewRSAKey(2048, []byte("secret"))
 	if err != nil {
-		t.Errorf("NewRSAKeyPair (encrypted) failed: %v", err)
+		t.Errorf("NewRSAKey (encrypted) failed: %v", err)
 	}
 	if key == nil {
-		t.Errorf("NewRSAKeyPair (encrypted) returned nil")
+		t.Errorf("NewRSAKey (encrypted) returned nil")
 	}
 
 	_, err = key.Decrypt([]byte("badpassword"))
 	if err != x509.IncorrectPasswordError {
-		t.Errorf("KeyPair should be encrypted")
+		t.Errorf("Key should be encrypted")
 	}
 
 	_, err = key.Decrypt([]byte("secret"))
 	if err != nil {
-		t.Errorf("KeyPair is not encrypted with desired password")
+		t.Errorf("Key is not encrypted with desired password")
 	}
 }
 
-func TestNewECDSAKeyPair(t *testing.T) {
-	key, err := NewECDSAKeyPair(elliptic.P256(), nil)
+func TestNewECDSAKey(t *testing.T) {
+	key, err := NewECDSAKey(elliptic.P256(), nil)
 	if err != nil {
-		t.Errorf("NewECDSAKeyPair failed: %v", err)
+		t.Errorf("NewECDSAKey failed: %v", err)
 	}
 	if key == nil {
-		t.Errorf("NewECDSAKeyPair returned nil")
+		t.Errorf("NewECDSAKey returned nil")
 	}
 
-	key, err = NewECDSAKeyPair(elliptic.P256(), []byte("secret"))
+	key, err = NewECDSAKey(elliptic.P256(), []byte("secret"))
 	if err != nil {
-		t.Errorf("NewECDSAKeyPair (encrypted) failed: %v", err)
+		t.Errorf("NewECDSAKey (encrypted) failed: %v", err)
 	}
 	if key == nil {
-		t.Errorf("NewECDSAKeyPair (encrypted) returned nil")
+		t.Errorf("NewECDSAKey (encrypted) returned nil")
 	}
 
 	_, err = key.Decrypt([]byte("badpassword"))
 	if err != x509.IncorrectPasswordError {
-		t.Errorf("KeyPair should be encrypted")
+		t.Errorf("Key should be encrypted")
 	}
 
 	_, err = key.Decrypt([]byte("secret"))
 	if err != nil {
-		t.Errorf("KeyPair is not encrypted with desired password")
+		t.Errorf("Key is not encrypted with desired password")
 	}
 }

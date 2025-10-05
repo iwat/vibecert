@@ -247,7 +247,7 @@ INSERT OR REPLACE INTO key (
 RETURNING id
 `
 
-func (q *Queries) CreateKey(ctx context.Context, arg *domain.KeyPair) (*domain.KeyPair, error) {
+func (q *Queries) CreateKey(ctx context.Context, arg *domain.Key) (*domain.Key, error) {
 	row := q.db.QueryRowContext(ctx, createKey,
 		arg.PublicKeyHash,
 		arg.KeyType,
@@ -269,9 +269,9 @@ FROM key
 WHERE id = ?
 `
 
-func (q *Queries) KeyByID(ctx context.Context, id int) (*domain.KeyPair, error) {
+func (q *Queries) KeyByID(ctx context.Context, id int) (*domain.Key, error) {
 	row := q.db.QueryRowContext(ctx, keyByID, id)
-	var i domain.KeyPair
+	var i domain.Key
 	err := row.Scan(
 		&i.ID,
 		&i.PublicKeyHash,
@@ -289,9 +289,9 @@ FROM key
 WHERE public_key_hash = ?
 `
 
-func (q *Queries) KeyByPublicKeyHash(ctx context.Context, publicKeyHash string) (*domain.KeyPair, error) {
+func (q *Queries) KeyByPublicKeyHash(ctx context.Context, publicKeyHash string) (*domain.Key, error) {
 	row := q.db.QueryRowContext(ctx, keyByPublicKeyHash, publicKeyHash)
-	var i domain.KeyPair
+	var i domain.Key
 	err := row.Scan(
 		&i.ID,
 		&i.PublicKeyHash,
@@ -308,15 +308,15 @@ SELECT
 FROM key
 `
 
-func (q *Queries) AllKeys(ctx context.Context) ([]*domain.KeyPair, error) {
+func (q *Queries) AllKeys(ctx context.Context) ([]*domain.Key, error) {
 	rows, err := q.db.QueryContext(ctx, allKeys)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*domain.KeyPair
+	var items []*domain.Key
 	for rows.Next() {
-		var i domain.KeyPair
+		var i domain.Key
 		if err := rows.Scan(
 			&i.ID,
 			&i.PublicKeyHash,

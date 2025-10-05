@@ -11,7 +11,7 @@ import (
 )
 
 type KeyInfo struct {
-	KeyPair      *domain.KeyPair
+	Key          *domain.Key
 	Certificates []*domain.Certificate
 }
 
@@ -27,7 +27,7 @@ func (app *App) ListKeys(ctx context.Context) ([]KeyInfo, error) {
 			return nil, fmt.Errorf("failed to get certificates by public key hash: %v", err)
 		}
 		keyInfo := KeyInfo{
-			KeyPair:      key,
+			Key:          key,
 			Certificates: certs,
 		}
 		keyInfos = append(keyInfos, keyInfo)
@@ -37,7 +37,7 @@ func (app *App) ListKeys(ctx context.Context) ([]KeyInfo, error) {
 }
 
 // ImportKey imports a private key, calculating its hash from the key itself
-func (app *App) ImportKeys(ctx context.Context, filename string) ([]*domain.KeyPair, error) {
+func (app *App) ImportKeys(ctx context.Context, filename string) ([]*domain.Key, error) {
 	pemBytes, err := app.fileReader.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read private key file: %v", err)
@@ -46,7 +46,7 @@ func (app *App) ImportKeys(ctx context.Context, filename string) ([]*domain.KeyP
 	tx := app.db.Begin(ctx)
 	defer tx.Rollback()
 
-	var importedKeys []*domain.KeyPair
+	var importedKeys []*domain.Key
 
 	for {
 		var block *pem.Block
@@ -55,18 +55,18 @@ func (app *App) ImportKeys(ctx context.Context, filename string) ([]*domain.KeyP
 			break
 		}
 
-		keyPair, err := domain.KeyPairFromUnencryptedPEM(block)
+		key, err := domain.KeyFromUnencryptedPEM(block)
 		if err == domain.ErrEncryptedPrivateKey {
 			currentPassword, err := app.passwordReader.ReadPassword("Entry current password: ")
 			if err != nil {
 				return nil, fmt.Errorf("failed to read password: %v", err)
 			}
-			keyPair, err = domain.KeyPairFromPEM(block, currentPassword)
+			key, err = domain.KeyFromPEM(block, currentPassword)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decrypt private key: %v", err)
 			}
 		}
-		importedKey, err := tx.CreateKey(ctx, keyPair)
+		importedKey, err := tx.CreateKey(ctx, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create key: %v", err)
 		}

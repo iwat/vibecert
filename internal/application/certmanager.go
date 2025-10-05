@@ -9,7 +9,7 @@ import (
 
 type CertificateNode struct {
 	Certificate *domain.Certificate
-	KeyPair     *domain.KeyPair
+	Key         *domain.Key
 	Children    []*CertificateNode
 }
 
@@ -22,11 +22,11 @@ func (app *App) BuildCertificateTree(ctx context.Context) []*CertificateNode {
 
 	var nodes []*CertificateNode
 	for _, cert := range certs {
-		keyPair, err := app.db.KeyByPublicKeyHash(ctx, cert.PublicKeyHash)
+		key, err := app.db.KeyByPublicKeyHash(ctx, cert.PublicKeyHash)
 		if err != nil {
-			keyPair = nil
+			key = nil
 		}
-		nodes = append(nodes, &CertificateNode{cert, keyPair, nil})
+		nodes = append(nodes, &CertificateNode{cert, key, nil})
 	}
 
 	var roots []*CertificateNode

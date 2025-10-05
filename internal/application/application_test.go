@@ -18,7 +18,7 @@ func TestCreateRootCA(t *testing.T) {
 	}
 
 	passwordReader.passwords = []string{"secret", "secret"}
-	cert, keyPair, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
 		IssuerID:   SelfSignedIssuerID,
 		CommonName: "test",
 		KeySize:    2048,
@@ -30,7 +30,7 @@ func TestCreateRootCA(t *testing.T) {
 	if cert == nil {
 		t.Fatal("Root CA should not be nil")
 	}
-	if keyPair == nil {
+	if key == nil {
 		t.Fatal("Root CA key pair should not be nil")
 	}
 }
@@ -47,14 +47,16 @@ func TestCreateIntermediateCA(t *testing.T) {
 		CommonName: "test root",
 		KeySize:    2048,
 		ValidDays:  3650,
+		IsCA:       true,
 	})
 
 	passwordReader.passwords = []string{"root-secret", "intermediate-secret", "intermediate-secret"}
-	cert, keyPair, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
 		IssuerID:   rootCert.ID,
 		CommonName: "test intermediate",
 		KeySize:    2048,
 		ValidDays:  3650,
+		IsCA:       true,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create intermediate CA: %v", err)
@@ -62,7 +64,7 @@ func TestCreateIntermediateCA(t *testing.T) {
 	if cert == nil {
 		t.Fatal("Intermediate CA should not be nil")
 	}
-	if keyPair == nil {
+	if key == nil {
 		t.Fatal("Intermediate CA key pair should not be nil")
 	}
 }

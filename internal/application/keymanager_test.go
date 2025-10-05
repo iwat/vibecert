@@ -15,11 +15,11 @@ func TestKeyManager_ImportKey(t *testing.T) {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
 
-	keyPair, err := domain.NewRSAKeyPair(2048, nil)
+	key, err := domain.NewRSAKey(2048, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
-	fileReader.files["test.pem"] = []byte(keyPair.PEMData)
+	fileReader.files["test.pem"] = []byte(key.PEMData)
 	importedKeys, err := app.ImportKeys(t.Context(), "test.pem")
 	if err != nil {
 		t.Errorf("Failed to import key: %v", err)
@@ -28,11 +28,11 @@ func TestKeyManager_ImportKey(t *testing.T) {
 		t.Errorf("Expected 1 imported key, got %d", len(importedKeys))
 	}
 
-	keyPair2, err := domain.NewRSAKeyPair(2048, []byte("secret"))
+	key2, err := domain.NewRSAKey(2048, []byte("secret"))
 	if err != nil {
 		t.Fatalf("Failed to generate encrypted test key: %v", err)
 	}
-	fileReader.files["test2.pem"] = []byte(keyPair2.PEMData)
+	fileReader.files["test2.pem"] = []byte(key2.PEMData)
 	passwordReader.passwords = []string{"secret"}
 	importedKeys, err = app.ImportKeys(t.Context(), "test2.pem")
 	if err != nil {
@@ -46,34 +46,34 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 		t.Fatalf("Failed to create test key manager: %v", err)
 	}
 
-	keyPair, err := domain.NewECDSAKeyPair(elliptic.P256(), nil)
+	key, err := domain.NewECDSAKey(elliptic.P256(), nil)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 
-	_, err = db.CreateKey(t.Context(), keyPair)
+	_, err = db.CreateKey(t.Context(), key)
 	if err != nil {
 		t.Fatalf("Failed to create key pair: %v", err)
 	}
 
 	passwordReader.passwords = []string{"secret", "secret"}
-	err = app.ReencryptPrivateKey(t.Context(), keyPair.ID)
+	err = app.ReencryptPrivateKey(t.Context(), key.ID)
 	if err != nil {
 		t.Fatalf("Failed to encrypt private key: %v", err)
 	}
 
-	keyPair, err = db.KeyByID(t.Context(), keyPair.ID)
+	key, err = db.KeyByID(t.Context(), key.ID)
 	if err != nil {
 		t.Fatalf("Failed to get key pair: %v", err)
 	}
 
-	block, _ := pem.Decode([]byte(keyPair.PEMData))
+	block, _ := pem.Decode([]byte(key.PEMData))
 	if !x509.IsEncryptedPEMBlock(block) {
 		t.Fatalf("Expected encrypted PEM block, got %v", block.Type)
 	}
 
 	passwordReader.passwords = []string{"secret", "newsecret", "newsecret"}
-	err = app.ReencryptPrivateKey(t.Context(), keyPair.ID)
+	err = app.ReencryptPrivateKey(t.Context(), key.ID)
 	if err != nil {
 		t.Fatalf("Failed to reencrypt private key: %v", err)
 	}

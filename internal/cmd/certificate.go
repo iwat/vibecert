@@ -256,9 +256,9 @@ func printCertificateTree(certs []*application.CertificateNode, prefix string) {
 		}
 
 		fmt.Printf("%s%s %s\n", prefix, marker, cert.Certificate)
-		if cert.KeyPair != nil {
+		if cert.Key != nil {
 			idLength := len(fmt.Sprintf("%d", cert.Certificate.ID)) + 5
-			fmt.Printf("%s%s%s%s%s\n", prefix, extension, prefix2, strings.Repeat(" ", idLength), cert.KeyPair)
+			fmt.Printf("%s%s%s%s%s\n", prefix, extension, prefix2, strings.Repeat(" ", idLength), cert.Key)
 		}
 
 		if len(cert.Children) > 0 {

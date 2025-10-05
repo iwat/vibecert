@@ -49,7 +49,7 @@ func (app *App) Initialize(ctx context.Context) error {
 	return app.db.InitializeDatabase(ctx)
 }
 
-func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateRequest) (*domain.Certificate, *domain.KeyPair, error) {
+func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateRequest) (*domain.Certificate, *domain.Key, error) {
 	var issuerPrivateKey domain.PrivateKey
 	var issuerCA *domain.Certificate
 	if req.IssuerID != SelfSignedIssuerID {
@@ -59,7 +59,7 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 			return nil, nil, fmt.Errorf("failed to retrieve issuer certificate: %v", err)
 		}
 
-		issuerKeyPair, err := app.db.KeyByPublicKeyHash(ctx, issuerCA.PublicKeyHash)
+		issuerKey, err := app.db.KeyByPublicKeyHash(ctx, issuerCA.PublicKeyHash)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
 		}
@@ -67,7 +67,7 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read password: %v", err)
 		}
-		issuerPrivateKey, err = issuerKeyPair.Decrypt(password)
+		issuerPrivateKey, err = issuerKey.Decrypt(password)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt issuer private key: %v", err)
 		}
@@ -78,11 +78,11 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
 	}
 
-	keyPair, err := domain.NewRSAKeyPair(req.KeySize, newPassword)
+	key, err := domain.NewRSAKey(req.KeySize, newPassword)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
-	privateKey, err := keyPair.Decrypt(newPassword)
+	privateKey, err := key.Decrypt(newPassword)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
 	}
@@ -115,7 +115,7 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to store certificate: %v", err)
 	}
-	_, err = tx.CreateKey(ctx, keyPair)
+	_, err = tx.CreateKey(ctx, key)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to store key: %v", err)
 	}
@@ -123,7 +123,7 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		return nil, nil, fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
-	return certificate, keyPair, nil
+	return certificate, key, nil
 }
 
 // ExportCertificateWithKeyToPKCS12 exports a certificate and its key to a PKCS#12 file

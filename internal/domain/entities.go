@@ -193,8 +193,8 @@ func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// KeyPair represents a private key with its hash
-type KeyPair struct {
+// Key represents an asymmetric private key
+type Key struct {
 	ID            int
 	PublicKeyHash string
 	KeyType       string
@@ -216,8 +216,8 @@ type PrivateKey interface {
 
 var ErrEncryptedPrivateKey = errors.New("key is encrypted")
 
-// NewRSAKeyPair creates a new RSA key pair with the given key size and password
-func NewRSAKeyPair(keySize int, password []byte) (*KeyPair, error) {
+// NewRSAKey creates a new RSA key pair with the given key size and password
+func NewRSAKey(keySize int, password []byte) (*Key, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, keySize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %v", err)
@@ -240,7 +240,7 @@ func NewRSAKeyPair(keySize int, password []byte) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to calculate public key hash: %v", err)
 	}
 
-	return &KeyPair{
+	return &Key{
 		ID:            -1,
 		PublicKeyHash: publicKeyHash,
 		KeyType:       "RSA",
@@ -249,7 +249,7 @@ func NewRSAKeyPair(keySize int, password []byte) (*KeyPair, error) {
 	}, nil
 }
 
-func NewECDSAKeyPair(curve elliptic.Curve, password []byte) (*KeyPair, error) {
+func NewECDSAKey(curve elliptic.Curve, password []byte) (*Key, error) {
 	privateKey, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %v", err)
@@ -276,7 +276,7 @@ func NewECDSAKeyPair(curve elliptic.Curve, password []byte) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to calculate public key hash: %v", err)
 	}
 
-	return &KeyPair{
+	return &Key{
 		ID:            -1,
 		PublicKeyHash: publicKeyHash,
 		KeyType:       "ECDSA/" + curve.Params().Name,
@@ -285,29 +285,29 @@ func NewECDSAKeyPair(curve elliptic.Curve, password []byte) (*KeyPair, error) {
 	}, nil
 }
 
-// KeyPairFromUnencryptedPEM creates a KeyPair instance from the given unencrypted PEM block
-func KeyPairFromUnencryptedPEM(block *pem.Block) (*KeyPair, error) {
+// KeyFromUnencryptedPEM creates a Key instance from the given unencrypted PEM block
+func KeyFromUnencryptedPEM(block *pem.Block) (*Key, error) {
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
 	}
 	if x509.IsEncryptedPEMBlock(block) {
 		return nil, ErrEncryptedPrivateKey
 	}
-	keyPair, err := keyPairFromPrivateKeyBytes(block.Bytes)
+	key, err := keyFromPrivateKeyBytes(block.Bytes)
 	if err != nil {
 		return nil, err
 	}
-	return &KeyPair{
-		ID:            keyPair.ID,
-		PublicKeyHash: keyPair.PublicKeyHash,
-		KeyType:       keyPair.KeyType,
-		KeySize:       keyPair.KeySize,
+	return &Key{
+		ID:            key.ID,
+		PublicKeyHash: key.PublicKeyHash,
+		KeyType:       key.KeyType,
+		KeySize:       key.KeySize,
 		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
 }
 
-// KeyPairFromPEM creates a KeyPair instance from the given encrypted PEM block with the specified password
-func KeyPairFromPEM(block *pem.Block, password []byte) (*KeyPair, error) {
+// KeyFromPEM creates a Key instance from the given encrypted PEM block with the specified password
+func KeyFromPEM(block *pem.Block, password []byte) (*Key, error) {
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
 	}
@@ -321,20 +321,20 @@ func KeyPairFromPEM(block *pem.Block, password []byte) (*KeyPair, error) {
 		return nil, err
 	}
 
-	keyPair, err := keyPairFromPrivateKeyBytes(keyBytes)
+	key, err := keyFromPrivateKeyBytes(keyBytes)
 	if err != nil {
 		return nil, err
 	}
-	return &KeyPair{
-		ID:            keyPair.ID,
-		PublicKeyHash: keyPair.PublicKeyHash,
-		KeyType:       keyPair.KeyType,
-		KeySize:       keyPair.KeySize,
+	return &Key{
+		ID:            key.ID,
+		PublicKeyHash: key.PublicKeyHash,
+		KeyType:       key.KeyType,
+		KeySize:       key.KeySize,
 		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
 }
 
-func (k *KeyPair) Decrypt(password []byte) (PrivateKey, error) {
+func (k *Key) Decrypt(password []byte) (PrivateKey, error) {
 	block, _ := pem.Decode([]byte(k.PEMData))
 
 	keyBytes, err := decryptPEM(block, password)
@@ -351,7 +351,7 @@ func (k *KeyPair) Decrypt(password []byte) (PrivateKey, error) {
 }
 
 // Reencrypt changes the password of a private key
-func (k *KeyPair) Reencrypt(currentPassword, newPassword []byte) error {
+func (k *Key) Reencrypt(currentPassword, newPassword []byte) error {
 	privateKey, err := k.Decrypt(currentPassword)
 	if err != nil {
 		return err
@@ -366,11 +366,11 @@ func (k *KeyPair) Reencrypt(currentPassword, newPassword []byte) error {
 	return nil
 }
 
-func (k *KeyPair) IsEncrypted() bool {
+func (k *Key) IsEncrypted() bool {
 	return x509.IsEncryptedPEMBlock(k.Block())
 }
 
-func (k *KeyPair) Block() *pem.Block {
+func (k *Key) Block() *pem.Block {
 	if k.block == nil {
 		block, _ := pem.Decode([]byte(k.PEMData))
 		k.block = block
@@ -378,7 +378,7 @@ func (k *KeyPair) Block() *pem.Block {
 	return k.block
 }
 
-func (k *KeyPair) String() string {
+func (k *Key) String() string {
 	return fmt.Sprintf("(🔑 %d) %s (%s, %d bits)", k.ID, k.PublicKeyHash, k.KeyType, k.KeySize)
 }
 
@@ -421,9 +421,9 @@ func decryptPEM(block *pem.Block, password []byte) ([]byte, error) {
 	return keyBytes, nil
 }
 
-// keyPairFromPrivateKeyBytes creates an incomplete KeyPair instance from the given private key bytes.
-// The constructed KeyPair instance will have a empty PEMData field.
-func keyPairFromPrivateKeyBytes(keyBytes []byte) (*KeyPair, error) {
+// keyFromPrivateKeyBytes creates an incomplete Key instance from the given private key bytes.
+// The constructed Key instance will have a empty PEMData field.
+func keyFromPrivateKeyBytes(keyBytes []byte) (*Key, error) {
 	privateKey, err := loadPrivateKeyFromPEM(keyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode private key: %v", err)
@@ -434,7 +434,7 @@ func keyPairFromPrivateKeyBytes(keyBytes []byte) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to calculate key hash: %v", err)
 	}
 
-	return &KeyPair{-1, keyHash, privateKey.algorithm, privateKey.bitSize, "", nil}, nil
+	return &Key{-1, keyHash, privateKey.algorithm, privateKey.bitSize, "", nil}, nil
 }
 
 func loadPrivateKeyFromPEM(keyBytes []byte) (privateKeyInfo, error) {
