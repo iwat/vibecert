@@ -60,12 +60,12 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 	var issuerCertificate *domain.Certificate
 	if req.IssuerCertificateID != SelfSignedCertificateID {
 		var err error
-		issuerCertificate, err = app.db.CertificateByID(ctx, req.IssuerCertificateID)
+		issuerCertificate, err = tx.CertificateByID(ctx, req.IssuerCertificateID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer certificate: %v", err)
 		}
 
-		issuerKey, err := app.db.KeyByPublicKeyHash(ctx, issuerCertificate.PublicKeyHash)
+		issuerKey, err := tx.KeyByPublicKeyHash(ctx, issuerCertificate.PublicKeyHash)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
 		}
