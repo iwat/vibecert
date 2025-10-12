@@ -411,6 +411,10 @@ func decryptPEM(block *pem.Block, password []byte) ([]byte, error) {
 	var keyBytes []byte
 	var err error
 	if x509.IsEncryptedPEMBlock(block) {
+		if len(password) == 0 {
+			return nil, ErrEncryptedPrivateKey
+		}
+
 		keyBytes, err = x509.DecryptPEMBlock(block, password)
 		if err != nil {
 			return nil, err

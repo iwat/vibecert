@@ -19,10 +19,11 @@ func TestCreateRootCA(t *testing.T) {
 
 	passwordReader.passwords = []string{"secret", "secret"}
 	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
-		IssuerID:   SelfSignedIssuerID,
-		CommonName: "test",
-		KeySize:    2048,
-		ValidDays:  3650,
+		IssuerCertificateID: SelfSignedCertificateID,
+		SubjectKeyID:        NewSubjectKeyID,
+		CommonName:          "test",
+		KeySize:             2048,
+		ValidDays:           3650,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create root CA: %v", err)
@@ -43,20 +44,22 @@ func TestCreateIntermediateCA(t *testing.T) {
 
 	passwordReader.passwords = []string{"root-secret", "root-secret"}
 	rootCert, _, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
-		IssuerID:   SelfSignedIssuerID,
-		CommonName: "test root",
-		KeySize:    2048,
-		ValidDays:  3650,
-		IsCA:       true,
+		IssuerCertificateID: SelfSignedCertificateID,
+		SubjectKeyID:        NewSubjectKeyID,
+		CommonName:          "test root",
+		KeySize:             2048,
+		ValidDays:           3650,
+		IsCA:                true,
 	})
 
 	passwordReader.passwords = []string{"root-secret", "intermediate-secret", "intermediate-secret"}
 	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
-		IssuerID:   rootCert.ID,
-		CommonName: "test intermediate",
-		KeySize:    2048,
-		ValidDays:  3650,
-		IsCA:       true,
+		IssuerCertificateID: rootCert.ID,
+		SubjectKeyID:        NewSubjectKeyID,
+		CommonName:          "test intermediate",
+		KeySize:             2048,
+		ValidDays:           3650,
+		IsCA:                true,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create intermediate CA: %v", err)

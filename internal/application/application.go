@@ -3,6 +3,7 @@ package application
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/x509"
 	"database/sql"
 	"fmt"
@@ -31,7 +32,8 @@ func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileRea
 
 // CreateCertificateRequest provides a request to create a new certificate
 type CreateCertificateRequest struct {
-	IssuerID               int
+	IssuerCertificateID    int
+	SubjectKeyID           int
 	CommonName             string
 	CountryName            string
 	StateName              string
@@ -43,56 +45,78 @@ type CreateCertificateRequest struct {
 	IsCA                   bool
 }
 
-const SelfSignedIssuerID = -1
+const SelfSignedCertificateID = -1
+const NewSubjectKeyID = -1
 
 func (app *App) Initialize(ctx context.Context) error {
 	return app.db.InitializeDatabase(ctx)
 }
 
 func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateRequest) (*domain.Certificate, *domain.Key, error) {
+	tx := app.db.Begin(ctx)
+	defer tx.Rollback()
+
 	var issuerPrivateKey domain.PrivateKey
-	var issuerCA *domain.Certificate
-	if req.IssuerID != SelfSignedIssuerID {
+	var issuerCertificate *domain.Certificate
+	if req.IssuerCertificateID != SelfSignedCertificateID {
 		var err error
-		issuerCA, err = app.db.CertificateByID(ctx, req.IssuerID)
+		issuerCertificate, err = app.db.CertificateByID(ctx, req.IssuerCertificateID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer certificate: %v", err)
 		}
 
-		issuerKey, err := app.db.KeyByPublicKeyHash(ctx, issuerCA.PublicKeyHash)
+		issuerKey, err := app.db.KeyByPublicKeyHash(ctx, issuerCertificate.PublicKeyHash)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
 		}
-		password, err := app.passwordReader.ReadPassword("Enter password of the issuer: ")
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to read password: %v", err)
-		}
-		issuerPrivateKey, err = issuerKey.Decrypt(password)
+		issuerPrivateKey, err = app.tryDecryptPrivateKey(issuerKey, "issuer")
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt issuer private key: %v", err)
 		}
 	}
 
-	newPassword, err := app.askPasswordWithConfirmation("password for the new CA")
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
-	}
+	var subjectKey *domain.Key
+	var subjectPublicKey crypto.PublicKey
+	if req.SubjectKeyID == NewSubjectKeyID {
+		newPassword, err := app.askPasswordWithConfirmation("password for the new CA")
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
+		}
 
-	key, err := domain.NewRSAKey(req.KeySize, newPassword)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
-	}
-	privateKey, err := key.Decrypt(newPassword)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
-	}
+		subjectKey, err = domain.NewRSAKey(req.KeySize, newPassword)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
+		}
+		_, err = tx.CreateKey(ctx, subjectKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to store key: %v", err)
+		}
 
-	if issuerPrivateKey == nil {
-		issuerPrivateKey = privateKey
+		privateKey, err := subjectKey.Decrypt(newPassword)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
+		}
+
+		if issuerPrivateKey == nil {
+			issuerPrivateKey = privateKey
+		}
+
+		subjectPublicKey = privateKey.Public()
+	} else {
+		var err error
+		subjectKey, err = app.db.KeyByID(ctx, req.SubjectKeyID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get key by ID: %v", err)
+		}
+		subjectPrivateKey, err := app.tryDecryptPrivateKey(subjectKey, "subject key")
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to decrypt subject private key: %v", err)
+		}
+		subjectPublicKey = subjectPrivateKey.Public()
 	}
 
 	certificate, err := domain.NewCertificate(&domain.CreateCertificateRequest{
-		IssuerCertificate:      issuerCA,
+		IssuerCertificate:      issuerCertificate,
 		IssuerPrivateKey:       issuerPrivateKey,
 		CommonName:             req.CommonName,
 		CountryName:            req.CountryName,
@@ -102,28 +126,21 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		OrganizationalUnitName: req.OrganizationalUnitName,
 		ValidDays:              req.ValidDays,
 		IsCA:                   req.IsCA,
-		PublicKey:              privateKey.Public(),
+		PublicKey:              subjectPublicKey,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
-	tx := app.db.Begin(ctx)
-	defer tx.Rollback()
-
 	_, err = tx.CreateCertificate(ctx, certificate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to store certificate: %v", err)
-	}
-	_, err = tx.CreateKey(ctx, key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to store key: %v", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
-	return certificate, key, nil
+	return certificate, subjectKey, nil
 }
 
 // ExportCertificateWithKeyToPKCS12 exports a certificate and its key to a PKCS#12 file
@@ -261,4 +278,19 @@ func (app *App) askPasswordWithConfirmation(label string) ([]byte, error) {
 		return nil, fmt.Errorf("passwords do not match")
 	}
 	return []byte(password), nil
+}
+
+func (app *App) tryDecryptPrivateKey(key *domain.Key, label string) (domain.PrivateKey, error) {
+	privateKey, err := key.Decrypt(nil)
+	if err == nil {
+		return privateKey, nil
+	}
+	if err != domain.ErrEncryptedPrivateKey {
+		return nil, fmt.Errorf("failed to decrypt private key: %v", err)
+	}
+	password, err := app.passwordReader.ReadPassword("Enter password for " + label + ": ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read password: %v", err)
+	}
+	return key.Decrypt(password)
 }

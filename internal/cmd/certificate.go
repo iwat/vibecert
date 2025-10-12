@@ -133,9 +133,11 @@ func setupFlagsForCreateCertificateParams(cmd *cobra.Command, params *applicatio
 
 func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 	request := application.CreateCertificateRequest{
-		ValidDays: 365 * 10,
-		KeySize:   4096,
-		IsCA:      true,
+		IssuerCertificateID: application.SelfSignedCertificateID,
+		SubjectKeyID:        application.NewSubjectKeyID,
+		ValidDays:           365 * 10,
+		KeySize:             4096,
+		IsCA:                true,
 	}
 	createRootCmd := &cobra.Command{
 		Use:   "create-root",
@@ -159,9 +161,10 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 
 func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
 	request := application.CreateCertificateRequest{
-		ValidDays: 365 * 5,
-		KeySize:   3072,
-		IsCA:      true,
+		SubjectKeyID: application.NewSubjectKeyID,
+		ValidDays:    365 * 5,
+		KeySize:      3072,
+		IsCA:         true,
 	}
 	createIntermediateCmd := &cobra.Command{
 		Use:   "create-intermediate",
@@ -178,7 +181,7 @@ func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
 			return nil
 		},
 	}
-	createIntermediateCmd.Flags().IntVar(&request.IssuerID, "issuer-id", 0, "Issuer certificate ID")
+	createIntermediateCmd.Flags().IntVar(&request.IssuerCertificateID, "issuer-id", 0, "Issuer certificate ID")
 	createIntermediateCmd.MarkFlagRequired("issuer-id")
 	setupFlagsForCreateCertificateParams(createIntermediateCmd, &request)
 
@@ -187,8 +190,9 @@ func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
 
 func certificateCreateLeafCmd(appBuilder *AppBuilder) *cobra.Command {
 	request := application.CreateCertificateRequest{
-		ValidDays: 365 * 3,
-		KeySize:   2048,
+		SubjectKeyID: application.NewSubjectKeyID,
+		ValidDays:    365 * 3,
+		KeySize:      2048,
 	}
 	createLeafCmd := &cobra.Command{
 		Use:   "create-leaf",
@@ -205,7 +209,7 @@ func certificateCreateLeafCmd(appBuilder *AppBuilder) *cobra.Command {
 			return nil
 		},
 	}
-	createLeafCmd.Flags().IntVar(&request.IssuerID, "issuer-id", 0, "Issuer certificate ID")
+	createLeafCmd.Flags().IntVar(&request.IssuerCertificateID, "issuer-id", 0, "Issuer certificate ID")
 	createLeafCmd.MarkFlagRequired("issuer-id")
 	setupFlagsForCreateCertificateParams(createLeafCmd, &request)
 
