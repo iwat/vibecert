@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os/exec"
 	"strings"
@@ -347,6 +348,7 @@ func (k *Key) Decrypt(password []byte) (PrivateKey, error) {
 		return nil, fmt.Errorf("failed to decode private key: %v", err)
 	}
 
+	slog.Info("decrypted", "key", k)
 	return privateKeyInfo.privateKey, nil
 }
 

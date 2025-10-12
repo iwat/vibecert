@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"crypto/x509"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/iwat/vibecert/internal/domain"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
@@ -152,13 +151,16 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 		}
 		return fmt.Errorf("failed to load certificate: %v", err)
 	}
+	slog.Info("got certificate", "cert", cert)
 	key, err := app.db.KeyByPublicKeyHash(ctx, cert.PublicKeyHash)
 	if err != nil {
 		return fmt.Errorf("failed to load key: %v", err)
 	}
+	slog.Info("got associated key", "key", key)
 
 	privateKey, err := key.Decrypt(nil)
-	if err == x509.IncorrectPasswordError {
+	if err == domain.ErrEncryptedPrivateKey {
+		slog.Info("key is encrypted, taking password")
 		password, err := app.passwordReader.ReadPassword("Enter password for private key:")
 		if err != nil {
 			return fmt.Errorf("failed to read password: %v", err)
@@ -167,6 +169,7 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 		if err != nil {
 			return fmt.Errorf("failed to decrypt private key: %v", err)
 		}
+		slog.Info("key is now decrypted")
 	}
 
 	p12Password, err := app.askPasswordWithConfirmation("password for PKCS#12 file")
@@ -174,9 +177,10 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 		return fmt.Errorf("failed to read password: %v", err)
 	}
 
+	slog.Info("encoding PKCS#12")
 	pfxData, err := pkcs12.Modern.Encode(privateKey, cert.X509Cert(), nil, string(p12Password))
 	if err != nil {
-		log.Fatalf("Failed to create PKCS#12 data: %v", err)
+		return err
 	}
 
 	err = app.fileWriter.WriteFile(filename, pfxData, 0600)

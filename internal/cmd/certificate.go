@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/iwat/vibecert/internal/application"
@@ -105,7 +104,7 @@ func certificateDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := appBuilder.App(cmd.Context()).DeleteCertificate(cmd.Context(), id, force)
 			if err != nil {
-				log.Fatalf("Failed to delete certificate: %v", err)
+				return err
 			}
 			fmt.Println(result)
 			return nil
@@ -226,6 +225,7 @@ func certificateExportPKCS12Cmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Export a certificate and its private key as PKCS#12",
 		Long:  "Export a certificate and its private key as PKCS#12",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			return appBuilder.App(cmd.Context()).ExportCertificateWithKeyToPKCS12(cmd.Context(), id, outputFile)
 		},
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/iwat/vibecert/internal/cmd"
@@ -29,7 +28,6 @@ func main() {
 		WithFileWriter(&OSFileWriter{}).
 		WithFileReader(&OSFileReader{})
 	if err := cmd.RootCmd(appBuilder).Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

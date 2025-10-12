@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/iwat/vibecert/internal/application"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
 	"github.com/iwat/vibecert/internal/infrastructure/tui"
+	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -62,12 +66,21 @@ func (b *AppBuilder) App(ctx context.Context) *application.App {
 }
 
 func RootCmd(appBuilder *AppBuilder) *cobra.Command {
+	var db string
+	var logLevel = logLevel(slog.LevelWarn)
 	rootCmd := &cobra.Command{
 		Use:   "vibecert",
 		Short: "VibeCert is a certificate manager",
 		Long:  "VibeCert is a certificate manager",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			appBuilder.WithDBPath(cmd.Flag("db").Value.String())
+			slog.SetDefault(slog.New(
+				tint.NewHandler(os.Stderr, &tint.Options{
+					Level:      slog.Level(logLevel),
+					TimeFormat: time.Kitchen,
+				}),
+			))
+
+			appBuilder.WithDBPath(db)
 			err := appBuilder.Build()
 			if err != nil {
 				return err
@@ -76,7 +89,8 @@ func RootCmd(appBuilder *AppBuilder) *cobra.Command {
 		},
 	}
 	rootFlags := pflag.NewFlagSet("root", pflag.ContinueOnError)
-	rootFlags.String("db", getDefaultDatabasePath(), "Path to SQLite database file")
+	rootFlags.StringVar(&db, "db", getDefaultDatabasePath(), "Path to SQLite database file")
+	rootFlags.Var(&logLevel, "log", "Log level")
 	rootCmd.PersistentFlags().AddFlagSet(rootFlags)
 
 	rootCmd.AddCommand(certificateCmd(appBuilder))
@@ -100,4 +114,31 @@ func getDefaultDatabasePath() string {
 	}
 
 	return filepath.Join(vibecertDir, "vibecert.db")
+}
+
+type logLevel slog.Level
+
+func (l *logLevel) String() string {
+	return slog.Level(*l).String()
+}
+
+func (l *logLevel) Set(value string) error {
+	value = strings.ToLower(value)
+	switch value {
+	case "debug":
+		*l = logLevel(slog.LevelDebug)
+	case "info":
+		*l = logLevel(slog.LevelInfo)
+	case "warn":
+		*l = logLevel(slog.LevelWarn)
+	case "error":
+		*l = logLevel(slog.LevelError)
+	default:
+		return fmt.Errorf("invalid log level: %s", value)
+	}
+	return nil
+}
+
+func (l *logLevel) Type() string {
+	return "log-level"
 }
