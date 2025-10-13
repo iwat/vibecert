@@ -119,7 +119,10 @@ func keyReencryptCmd(appBuilder *AppBuilder) *cobra.Command {
 }
 
 func keyDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
-	var id int
+	var (
+		id    int
+		force bool
+	)
 	deleteCmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Delete a private key",
@@ -130,6 +133,7 @@ func keyDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 	}
 	deleteCmd.Flags().IntVar(&id, "id", -1, "Private key ID")
 	deleteCmd.MarkFlagRequired("id")
+	deleteCmd.Flags().BoolVar(&force, "force", false, "Attempt to delete the certificate without prompting for confirmation")
 
 	return deleteCmd
 }

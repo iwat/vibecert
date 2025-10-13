@@ -130,8 +130,9 @@ func createTestApp(t *testing.T) (*App, *dblib.Queries, *MockPasswordReader, *Mo
 	passwordReader := NewMockPasswordReader()
 	fileReader := NewMockFileReader()
 	fileWriter := NewMockFileWriter()
+	confirmer := NewMockConfirmer()
 
-	return NewApp(db, passwordReader, fileReader, fileWriter), db, passwordReader, fileReader, fileWriter, nil
+	return NewApp(db, passwordReader, fileReader, fileWriter, confirmer), db, passwordReader, fileReader, fileWriter, nil
 }
 
 // Test helper to create in-memory SQLite database
@@ -259,4 +260,14 @@ func (r *MockFileReader) ReadFile(filename string) ([]byte, error) {
 		return nil, fmt.Errorf("file not found")
 	}
 	return data, nil
+}
+
+type MockConfirmer struct{}
+
+func NewMockConfirmer() *MockConfirmer {
+	return &MockConfirmer{}
+}
+
+func (c *MockConfirmer) Confirm(prompt string) bool {
+	return true
 }

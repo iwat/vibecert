@@ -112,7 +112,7 @@ func certificateDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 	}
 	deleteCmd.Flags().IntVar(&id, "id", -1, "Certificate ID")
 	deleteCmd.MarkFlagRequired("id")
-	deleteCmd.Flags().BoolVar(&force, "force", false, "Unused")
+	deleteCmd.Flags().BoolVar(&force, "force", false, "Attempt to delete the certificate without prompting for confirmation")
 
 	return deleteCmd
 }

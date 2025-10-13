@@ -24,6 +24,7 @@ type AppBuilder struct {
 	dbPath     string
 	fileReader application.FileReader
 	fileWriter application.FileWriter
+	confirmer  application.Confirmer
 	app        *application.App
 }
 
@@ -46,6 +47,11 @@ func (b *AppBuilder) WithFileWriter(writer application.FileWriter) *AppBuilder {
 	return b
 }
 
+func (b *AppBuilder) WithConfirmer(confirmer application.Confirmer) *AppBuilder {
+	b.confirmer = confirmer
+	return b
+}
+
 func (b *AppBuilder) Build() error {
 	dir := filepath.Dir(b.dbPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -56,7 +62,7 @@ func (b *AppBuilder) Build() error {
 	if err != nil {
 		return err
 	}
-	b.app = application.NewApp(dblib.New(db), &tui.TerminalPasswordReader{}, b.fileReader, b.fileWriter)
+	b.app = application.NewApp(dblib.New(db), &tui.TerminalPasswordReader{}, b.fileReader, b.fileWriter, b.confirmer)
 	return nil
 }
 

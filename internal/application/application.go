@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -13,19 +14,23 @@ import (
 	"software.sslmate.com/src/go-pkcs12"
 )
 
+var ErrCancelled = errors.New("cancelled")
+
 type App struct {
 	db             *dblib.Queries
 	passwordReader PasswordReader
 	fileReader     FileReader
 	fileWriter     FileWriter
+	confirmer      Confirmer
 }
 
-func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileReader, fileWriter FileWriter) *App {
+func NewApp(db *dblib.Queries, passwordReader PasswordReader, fileReader FileReader, fileWriter FileWriter, confirmer Confirmer) *App {
 	return &App{
 		db:             db,
 		passwordReader: passwordReader,
 		fileReader:     fileReader,
 		fileWriter:     fileWriter,
+		confirmer:      confirmer,
 	}
 }
 
@@ -200,75 +205,6 @@ type DeleteResult struct {
 	ChildrenCount      int
 }
 
-// DeleteCertificate deletes a certificate and optionally its key
-func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) (*DeleteResult, error) {
-	cert, err := app.db.CertificateByID(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("certificate with id %d not found", id)
-		}
-		return nil, fmt.Errorf("failed to load certificate: %v", err)
-	}
-	result := &DeleteResult{
-		Subject: cert.SubjectDN,
-	}
-
-	tx := app.db.Begin(ctx)
-	defer tx.Rollback()
-
-	err = app.deleteCertificateCascade(ctx, tx.Queries, cert, force, result)
-	if err != nil {
-		return nil, err
-	}
-	err = tx.Commit()
-	if err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %v", err)
-	}
-	result.CertificateDeleted = true
-	return result, err
-}
-
-func (app *App) deleteCertificateCascade(ctx context.Context, tx *dblib.Queries, cert *domain.Certificate, force bool, result *DeleteResult) error {
-	childCerts, err := tx.CertificatesByIssuerAndAuthorityKeyID(ctx, cert.SubjectDN, cert.SubjectKeyID)
-	if err != nil {
-		return fmt.Errorf("failed to load child certificates: %v", err)
-	}
-	if len(childCerts) > 0 {
-		if !force {
-			return fmt.Errorf("cannot delete certificate with child certificates")
-		}
-
-		for _, childCert := range childCerts {
-			err := app.deleteCertificateCascade(ctx, tx, childCert, force, result)
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		if err = tx.DeleteCertificate(ctx, cert.ID); err != nil {
-			return err
-		}
-		result.ChildrenCount++
-	}
-
-	return nil
-}
-
-// PasswordReader interface for abstracting password input
-type PasswordReader interface {
-	ReadPassword(prompt string) ([]byte, error)
-}
-
-// FileWriter interface for abstracting file operations
-type FileWriter interface {
-	WriteFile(filename string, data []byte, perm int) error
-}
-
-// FileReader interface for abstracting file operations
-type FileReader interface {
-	ReadFile(filename string) ([]byte, error)
-}
-
 func (app *App) askPasswordWithConfirmation(label string) ([]byte, error) {
 	password, err := app.passwordReader.ReadPassword("Enter " + label + ": ")
 	if err != nil {
@@ -297,4 +233,23 @@ func (app *App) tryDecryptPrivateKey(key *domain.Key, label string) (domain.Priv
 		return nil, fmt.Errorf("failed to read password: %v", err)
 	}
 	return key.Decrypt(password)
+}
+
+// PasswordReader interface for abstracting password input
+type PasswordReader interface {
+	ReadPassword(prompt string) ([]byte, error)
+}
+
+// FileWriter interface for abstracting file operations
+type FileWriter interface {
+	WriteFile(filename string, data []byte, perm int) error
+}
+
+// FileReader interface for abstracting file operations
+type FileReader interface {
+	ReadFile(filename string) ([]byte, error)
+}
+
+type Confirmer interface {
+	Confirm(prompt string) bool
 }
