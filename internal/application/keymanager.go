@@ -134,3 +134,50 @@ func (app *App) ExportPrivateKey(ctx context.Context, id int) (string, error) {
 
 	return key.PEMData, nil
 }
+
+func (app *App) PruneUnusedKeys(ctx context.Context, force bool) error {
+	keys, err := app.db.AllKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load keys: %v", err)
+	}
+
+	var unusedKeys []*domain.Key
+	for _, key := range keys {
+		certs, err := app.db.CertificatesByPublicKeyHash(ctx, key.PublicKeyHash)
+		if err != nil {
+			return err
+		}
+		if len(certs) == 0 {
+			unusedKeys = append(unusedKeys, key)
+			fmt.Println(key)
+		}
+	}
+
+	if len(unusedKeys) == 0 {
+		fmt.Println("No unused keys found")
+		return nil
+	}
+
+	if !force {
+		ok := app.confirmer.Confirm("Delete the above keys?")
+		if !ok {
+			return ErrCancelled
+		}
+	}
+
+	tx := app.db.Begin(ctx)
+	defer tx.Rollback()
+
+	for _, key := range unusedKeys {
+		err := tx.DeleteKey(ctx, key.ID)
+		if err != nil {
+			return fmt.Errorf("failed to delete unused key: %v", err)
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+	return err
+}

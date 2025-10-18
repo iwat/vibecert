@@ -18,6 +18,7 @@ func keyCmd(appBuilder *AppBuilder) *cobra.Command {
 	keyCmd.AddCommand(keyExportCmd(appBuilder))
 	keyCmd.AddCommand(keyReencryptCmd(appBuilder))
 	keyCmd.AddCommand(keyDeleteCmd(appBuilder))
+	keyCmd.AddCommand(keyPruneCmd(appBuilder))
 
 	return keyCmd
 }
@@ -138,6 +139,22 @@ func keyDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 	deleteCmd.Flags().IntVar(&id, "id", -1, "Private key ID")
 	deleteCmd.MarkFlagRequired("id")
 	deleteCmd.Flags().BoolVar(&force, "force", false, "Attempt to delete the certificate without prompting for confirmation")
+
+	return deleteCmd
+}
+
+func keyPruneCmd(appBuilder *AppBuilder) *cobra.Command {
+	var force bool
+	deleteCmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Prune unused private key(s)",
+		Long:  "Prune unused private key(s)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return appBuilder.App(cmd.Context()).PruneUnusedKeys(cmd.Context(), force)
+		},
+	}
+	deleteCmd.Flags().BoolVar(&force, "force", false, "Attempt to delete the unused keys without prompting for confirmation")
 
 	return deleteCmd
 }
