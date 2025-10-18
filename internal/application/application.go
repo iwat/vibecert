@@ -132,64 +132,21 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 	tx := app.db.Begin(ctx)
 	defer tx.Rollback()
 
-	var issuerPrivateKey domain.PrivateKey
-	var issuerCertificate *domain.Certificate
-	if req.IssuerCertificateID != SelfSignedCertificateID {
-		var err error
-		issuerCertificate, err = tx.CertificateByID(ctx, req.IssuerCertificateID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to retrieve issuer certificate: %v", err)
-		}
-
-		issuerKey, err := tx.KeyByPublicKeyHash(ctx, issuerCertificate.PublicKeyHash)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
-		}
-
-		issuerPrivateKey, err = app.tryDecryptPrivateKey(issuerKey, "issuer")
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to decrypt issuer private key: %v", err)
-		}
+	issuerKey, issuerPrivateKey, issuerCertificate, err := app.getIssuerContext(ctx, tx, req)
+	if err != nil {
+		return nil, nil, err
 	}
+	slog.Info("selected issuer", "cert", issuerCertificate, "key", issuerKey)
 
-	var subjectKey *domain.Key
-	var subjectPublicKey crypto.PublicKey
-	if req.SubjectKeyID == NewSubjectKeyID {
-		newPassword, err := app.askPasswordWithConfirmation("password for the new CA")
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
-		}
+	subjectKey, subjectPublicKey, subjectPrivateKey, err := app.getSubjectKeyContext(ctx, tx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	slog.Info("selected subject key", "key", subjectKey)
 
-		subjectKey, err = req.KeySpec.Key(newPassword)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
-		}
-		_, err = tx.CreateKey(ctx, subjectKey)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to store key: %v", err)
-		}
-
-		privateKey, err := subjectKey.Decrypt(newPassword)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
-		}
-
-		if issuerPrivateKey == nil {
-			issuerPrivateKey = privateKey
-		}
-
-		subjectPublicKey = privateKey.Public()
-	} else {
-		var err error
-		subjectKey, err = app.db.KeyByID(ctx, req.SubjectKeyID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get key by ID: %v", err)
-		}
-		subjectPrivateKey, err := app.tryDecryptPrivateKey(subjectKey, "subject key")
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to decrypt subject private key: %v", err)
-		}
-		subjectPublicKey = subjectPrivateKey.Public()
+	if req.IssuerCertificateID == SelfSignedCertificateID {
+		slog.Info("self-signed certificate, using subject key as issuer key")
+		issuerPrivateKey = subjectPrivateKey
 	}
 
 	certificate, err := domain.NewCertificate(&domain.CreateCertificateRequest{
@@ -209,15 +166,97 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
-	_, err = tx.CreateCertificate(ctx, certificate)
-	if err != nil {
+	// 5. Store and Commit
+	if _, err = tx.CreateCertificate(ctx, certificate); err != nil {
 		return nil, nil, fmt.Errorf("failed to store certificate: %v", err)
 	}
+
 	if err = tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
 	return certificate, subjectKey, nil
+}
+
+// getIssuerContext handles all logic for retrieving the issuer's private key and certificate.
+// It abstracts away the self-signed vs. standard issuer difference.
+func (app *App) getIssuerContext(ctx context.Context, tx *dblib.TransactionalQueries, req *CreateCertificateRequest) (*domain.Key, domain.PrivateKey, *domain.Certificate, error) {
+	if req.IssuerCertificateID == SelfSignedCertificateID {
+		slog.Debug("not selecting certificate, request is self-signed")
+		if req.SubjectKeyID != NewSubjectKeyID {
+			// Logic for self-signed with existing key (using subject key as issuer key)
+			key, err := tx.KeyByID(ctx, req.SubjectKeyID)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to retrieve self-signed issuer key: %v", err)
+			}
+			issuerPrivateKey, err := app.tryDecryptPrivateKey(key, "self-signed issuer key")
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to decrypt self-signed issuer private key: %v", err)
+			}
+			slog.Debug("selected issuer key for self-signed certificate", "key", key)
+			return key, issuerPrivateKey, nil, nil
+		}
+		return nil, nil, nil, nil
+	}
+
+	// Standard intermediate CA issuance
+	issuerCertificate, err := tx.CertificateByID(ctx, req.IssuerCertificateID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to retrieve issuer certificate: %v", err)
+	}
+	slog.Debug("selected issuer certificate", "cert", issuerCertificate)
+
+	issuerKey, err := tx.KeyByPublicKeyHash(ctx, issuerCertificate.PublicKeyHash)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
+	}
+	slog.Debug("selected issuer key", "key", issuerKey)
+
+	issuerPrivateKey, err := app.tryDecryptPrivateKey(issuerKey, "issuer")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to decrypt issuer private key: %v", err)
+	}
+
+	return issuerKey, issuerPrivateKey, issuerCertificate, nil
+}
+
+// getSubjectKeyContext handles logic for retrieving or creating the subject's private key.
+func (app *App) getSubjectKeyContext(ctx context.Context, tx *dblib.TransactionalQueries, req *CreateCertificateRequest) (*domain.Key, crypto.PublicKey, domain.PrivateKey, error) {
+	if req.SubjectKeyID == NewSubjectKeyID {
+		newPassword, err := app.askPasswordWithConfirmation("password for the new CA")
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
+		}
+
+		subjectKey, err := req.KeySpec.Key(newPassword)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to generate private key: %v", err)
+		}
+		if _, err := tx.CreateKey(ctx, subjectKey); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to store key: %v", err)
+		}
+		slog.Debug("created subject key", "key", subjectKey)
+
+		privateKey, err := subjectKey.Decrypt(newPassword)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to decrypt private key: %v", err)
+		}
+
+		slog.Debug("using created subject key", "key", subjectKey)
+		return subjectKey, privateKey.Public(), privateKey, nil
+	}
+
+	// Existing subject key
+	subjectKey, err := tx.KeyByID(ctx, req.SubjectKeyID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to get key by ID: %v", err)
+	}
+	slog.Debug("selected subject key", "key", subjectKey)
+	subjectPrivateKey, err := app.tryDecryptPrivateKey(subjectKey, "subject key")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to decrypt subject private key: %v", err)
+	}
+	return subjectKey, subjectPrivateKey.Public(), subjectPrivateKey, nil
 }
 
 // ExportCertificateWithKeyToPKCS12 exports a certificate and its key to a PKCS#12 file

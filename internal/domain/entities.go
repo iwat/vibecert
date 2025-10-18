@@ -314,7 +314,7 @@ func KeyFromPEM(block *pem.Block, password []byte) (*Key, error) {
 		return nil, fmt.Errorf("encrypted PKCS#8 is not supported")
 	}
 
-	keyBytes, err := decryptPEM(block, password)
+	keyBytes, _, err := decryptPEM(block, password)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func KeyFromPEM(block *pem.Block, password []byte) (*Key, error) {
 func (k *Key) Decrypt(password []byte) (PrivateKey, error) {
 	block, _ := pem.Decode([]byte(k.PEMData))
 
-	keyBytes, err := decryptPEM(block, password)
+	keyBytes, decrypted, err := decryptPEM(block, password)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +344,9 @@ func (k *Key) Decrypt(password []byte) (PrivateKey, error) {
 		return nil, fmt.Errorf("failed to decode private key: %v", err)
 	}
 
-	slog.Info("decrypted", "key", k)
+	if decrypted {
+		slog.Info("decrypted", "key", k)
+	}
 	return privateKeyInfo.privateKey, nil
 }
 
@@ -405,22 +407,24 @@ func encryptPrivateKey(privateKey PrivateKey, password []byte) (string, error) {
 	return string(pem.EncodeToMemory(encryptedBlock)), nil
 }
 
-func decryptPEM(block *pem.Block, password []byte) ([]byte, error) {
+func decryptPEM(block *pem.Block, password []byte) ([]byte, bool, error) {
 	var keyBytes []byte
 	var err error
+	var decrypted bool
 	if x509.IsEncryptedPEMBlock(block) {
 		if len(password) == 0 {
-			return nil, ErrEncryptedPrivateKey
+			return nil, false, ErrEncryptedPrivateKey
 		}
 
 		keyBytes, err = x509.DecryptPEMBlock(block, password)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		decrypted = true
 	} else {
 		keyBytes = block.Bytes
 	}
-	return keyBytes, nil
+	return keyBytes, decrypted, nil
 }
 
 // keyFromPrivateKeyBytes creates an incomplete Key instance from the given private key bytes.
