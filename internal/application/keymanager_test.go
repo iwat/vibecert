@@ -78,3 +78,35 @@ func TestKeyManager_ReencryptPrivateKey(t *testing.T) {
 		t.Fatalf("Failed to reencrypt private key: %v", err)
 	}
 }
+
+func TestKeyManager_CreateKey(t *testing.T) {
+	app, db, pwdReader, _, _, err := createTestApp(t)
+	if err != nil {
+		t.Fatalf("Failed to create test key manager: %v", err)
+	}
+
+	var specs = []KeySpec{
+		KeySpecRSA2048,
+		KeySpecRSA3072,
+		KeySpecRSA4096,
+		KeySpecECDSA224,
+		KeySpecECDSA256,
+		KeySpecECDSA384,
+	}
+	for _, spec := range specs {
+		t.Run(spec.String(), func(t *testing.T) {
+			pwdReader.passwords = []string{"newsecret", "newsecret"}
+			key, err := app.CreateKey(t.Context(), spec)
+			if err != nil {
+				t.Fatalf("Failed to create key pair: %v", err)
+			}
+			key2, err := db.KeyByID(t.Context(), key.ID)
+			if err != nil {
+				t.Fatalf("Failed to get key pair: %v", err)
+			}
+			if key.PublicKeyHash != key2.PublicKeyHash {
+				t.Fatalf("Expected key hash %s, got %s", key.PublicKeyHash, key2.PublicKeyHash)
+			}
+		})
+	}
+}

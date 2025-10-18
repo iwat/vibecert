@@ -145,6 +145,7 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to retrieve issuer private key: %v", err)
 		}
+
 		issuerPrivateKey, err = app.tryDecryptPrivateKey(issuerKey, "issuer")
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt issuer private key: %v", err)
