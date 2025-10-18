@@ -52,25 +52,25 @@ DELETE FROM certificate WHERE id = ?;
 
 -- name: CreateKey :one
 INSERT OR REPLACE INTO key (
-    public_key_hash, key_type, key_size, pem_data
-) VALUES (?, ?, ?, ?)
+    public_key_hash, key_spec, pem_data
+) VALUES (?, ?, ?)
 RETURNING id;
 
 -- name: KeyByID :one
 SELECT
-    id, public_key_hash, key_type, key_size, pem_data
+    id, public_key_hash, key_spec, pem_data
 FROM key
 WHERE id = ?;
 
 -- name: KeyByPublicKeyHash :one
 SELECT
-    id, public_key_hash, key_type, key_size, pem_data
+    id, public_key_hash, key_spec, pem_data
 FROM key
 WHERE public_key_hash = ?;
 
 -- name: AllKeys :many
 SELECT
-    id, public_key_hash, key_type, key_size, pem_data
+    id, public_key_hash, key_spec, pem_data
 FROM key;
 
 -- name: UpdateKeyPEM :exec

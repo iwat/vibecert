@@ -69,7 +69,7 @@ func keyImportCmd(appBuilder *AppBuilder) *cobra.Command {
 
 			fmt.Printf("Private key imported successfully:\n")
 			for _, k := range importedKeys {
-				fmt.Printf("%d) %s (%s, %d bits)\n", k.ID, k.PublicKeyHash, k.KeyType, k.KeySize)
+				fmt.Printf("%d) %s (%s)\n", k.ID, k.PublicKeyHash, k.KeySpec)
 			}
 			return nil
 		},

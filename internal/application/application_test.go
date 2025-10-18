@@ -22,7 +22,7 @@ func TestCreateRootCA(t *testing.T) {
 		IssuerCertificateID: SelfSignedCertificateID,
 		SubjectKeyID:        NewSubjectKeyID,
 		CommonName:          "test",
-		KeySize:             2048,
+		KeySpec:             KeySpecECDSA384,
 		ValidDays:           3650,
 	})
 	if err != nil {
@@ -47,7 +47,7 @@ func TestCreateIntermediateCA(t *testing.T) {
 		IssuerCertificateID: SelfSignedCertificateID,
 		SubjectKeyID:        NewSubjectKeyID,
 		CommonName:          "test root",
-		KeySize:             2048,
+		KeySpec:             KeySpecRSA4096,
 		ValidDays:           3650,
 		IsCA:                true,
 	})
@@ -57,7 +57,7 @@ func TestCreateIntermediateCA(t *testing.T) {
 		IssuerCertificateID: rootCert.ID,
 		SubjectKeyID:        NewSubjectKeyID,
 		CommonName:          "test intermediate",
-		KeySize:             2048,
+		KeySpec:             KeySpecECDSA224,
 		ValidDays:           3650,
 		IsCA:                true,
 	})

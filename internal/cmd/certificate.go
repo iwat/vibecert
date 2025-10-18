@@ -129,7 +129,7 @@ func setupFlagsForCreateCertificateParams(cmd *cobra.Command, params *applicatio
 	cmd.Flags().StringVar(&params.OrganizationName, "dn-o", "", "Organization Name (optional)")
 	cmd.Flags().StringVar(&params.OrganizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
 	cmd.Flags().IntVar(&params.ValidDays, "valid-days", params.ValidDays, "Certificate validity in days")
-	cmd.Flags().IntVar(&params.KeySize, "rsa-key-size", params.KeySize, "RSA key size in bits")
+	cmd.Flags().Var(&params.KeySpec, "keyspec", "Key spec")
 	return nil
 }
 
@@ -138,7 +138,7 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 		IssuerCertificateID: application.SelfSignedCertificateID,
 		SubjectKeyID:        application.NewSubjectKeyID,
 		ValidDays:           365 * 10,
-		KeySize:             4096,
+		KeySpec:             application.KeySpecECDSA256,
 		IsCA:                true,
 	}
 	createRootCmd := &cobra.Command{
@@ -166,7 +166,7 @@ func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
 	request := application.CreateCertificateRequest{
 		SubjectKeyID: application.NewSubjectKeyID,
 		ValidDays:    365 * 5,
-		KeySize:      3072,
+		KeySpec:      application.KeySpecECDSA256,
 		IsCA:         true,
 	}
 	createIntermediateCmd := &cobra.Command{
@@ -196,7 +196,7 @@ func certificateCreateLeafCmd(appBuilder *AppBuilder) *cobra.Command {
 	request := application.CreateCertificateRequest{
 		SubjectKeyID: application.NewSubjectKeyID,
 		ValidDays:    365 * 3,
-		KeySize:      2048,
+		KeySpec:      application.KeySpecECDSA256,
 	}
 	createLeafCmd := &cobra.Command{
 		Use:   "create-leaf",

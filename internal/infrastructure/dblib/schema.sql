@@ -20,7 +20,6 @@ CREATE INDEX IF NOT EXISTS idx_certificate_issuer_dn_authority_key_id ON certifi
 CREATE TABLE IF NOT EXISTS key (
 	id INTEGER PRIMARY KEY,
     public_key_hash TEXT NOT NULL UNIQUE,
-    key_type TEXT NOT NULL,
-    key_size INTEGER NOT NULL,
+    key_spec TEXT NOT NULL,
 	pem_data TEXT NOT NULL
 );

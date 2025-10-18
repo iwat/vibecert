@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/elliptic"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -44,9 +45,67 @@ type CreateCertificateRequest struct {
 	LocalityName           string
 	OrganizationName       string
 	OrganizationalUnitName string
-	KeySize                int
+	KeySpec                KeySpec
 	ValidDays              int
 	IsCA                   bool
+}
+
+type KeySpec string
+
+const (
+	KeySpecRSA2048  KeySpec = "RSA2048"
+	KeySpecRSA3072  KeySpec = "RSA3072"
+	KeySpecRSA4096  KeySpec = "RSA4096"
+	KeySpecECDSA224 KeySpec = "ECDSA256"
+	KeySpecECDSA256 KeySpec = "ECDSA384"
+	KeySpecECDSA384 KeySpec = "ECDSA521"
+)
+
+func (k *KeySpec) Set(v string) error {
+	switch v {
+	case string(KeySpecRSA2048):
+		*k = KeySpecRSA2048
+	case string(KeySpecRSA3072):
+		*k = KeySpecRSA3072
+	case string(KeySpecRSA4096):
+		*k = KeySpecRSA4096
+	case string(KeySpecECDSA224):
+		*k = KeySpecECDSA224
+	case string(KeySpecECDSA256):
+		*k = KeySpecECDSA256
+	case string(KeySpecECDSA384):
+		*k = KeySpecECDSA384
+	default:
+		return fmt.Errorf("invalid key spec: %s", v)
+	}
+	return nil
+}
+
+func (k *KeySpec) String() string {
+	return string(*k)
+}
+
+func (k *KeySpec) Type() string {
+	return "keyspec"
+}
+
+func (k *KeySpec) Key(password []byte) (*domain.Key, error) {
+	switch *k {
+	case KeySpecRSA2048:
+		return domain.NewRSAKey(2048, password)
+	case KeySpecRSA3072:
+		return domain.NewRSAKey(3072, password)
+	case KeySpecRSA4096:
+		return domain.NewRSAKey(4096, password)
+	case KeySpecECDSA224:
+		return domain.NewECDSAKey(elliptic.P224(), password)
+	case KeySpecECDSA256:
+		return domain.NewECDSAKey(elliptic.P256(), password)
+	case KeySpecECDSA384:
+		return domain.NewECDSAKey(elliptic.P384(), password)
+	default:
+		return nil, fmt.Errorf("invalid key spec: %s", *k)
+	}
 }
 
 const SelfSignedCertificateID = -1
@@ -87,7 +146,7 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 			return nil, nil, fmt.Errorf("failed to ask for new password: %v", err)
 		}
 
-		subjectKey, err = domain.NewRSAKey(req.KeySize, newPassword)
+		subjectKey, err = req.KeySpec.Key(newPassword)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
 		}

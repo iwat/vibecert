@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -198,16 +199,14 @@ func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
 type Key struct {
 	ID            int
 	PublicKeyHash string
-	KeyType       string
-	KeySize       int
+	KeySpec       string
 	PEMData       string
 	block         *pem.Block
 }
 
 type privateKeyInfo struct {
 	privateKey PrivateKey
-	algorithm  string
-	bitSize    int
+	spec       string
 }
 
 type PrivateKey interface {
@@ -244,8 +243,7 @@ func NewRSAKey(keySize int, password []byte) (*Key, error) {
 	return &Key{
 		ID:            -1,
 		PublicKeyHash: publicKeyHash,
-		KeyType:       "RSA",
-		KeySize:       keySize,
+		KeySpec:       "RSA" + strconv.Itoa(keySize),
 		PEMData:       keyPEM,
 	}, nil
 }
@@ -280,8 +278,7 @@ func NewECDSAKey(curve elliptic.Curve, password []byte) (*Key, error) {
 	return &Key{
 		ID:            -1,
 		PublicKeyHash: publicKeyHash,
-		KeyType:       "ECDSA/" + curve.Params().Name,
-		KeySize:       curve.Params().BitSize,
+		KeySpec:       "ECDSA" + strconv.Itoa(curve.Params().BitSize),
 		PEMData:       keyPEM,
 	}, nil
 }
@@ -301,8 +298,7 @@ func KeyFromUnencryptedPEM(block *pem.Block) (*Key, error) {
 	return &Key{
 		ID:            key.ID,
 		PublicKeyHash: key.PublicKeyHash,
-		KeyType:       key.KeyType,
-		KeySize:       key.KeySize,
+		KeySpec:       key.KeySpec,
 		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
 }
@@ -329,8 +325,7 @@ func KeyFromPEM(block *pem.Block, password []byte) (*Key, error) {
 	return &Key{
 		ID:            key.ID,
 		PublicKeyHash: key.PublicKeyHash,
-		KeyType:       key.KeyType,
-		KeySize:       key.KeySize,
+		KeySpec:       key.KeySpec,
 		PEMData:       string(pem.EncodeToMemory(block)),
 	}, nil
 }
@@ -381,7 +376,7 @@ func (k *Key) Block() *pem.Block {
 }
 
 func (k *Key) String() string {
-	return fmt.Sprintf("(🔑 %d) %s (%s, %d bits)", k.ID, k.PublicKeyHash, k.KeyType, k.KeySize)
+	return fmt.Sprintf("(🔑 %d) %s (%s)", k.ID, k.PublicKeyHash, k.KeySpec)
 }
 
 func encryptPrivateKey(privateKey PrivateKey, password []byte) (string, error) {
@@ -440,26 +435,26 @@ func keyFromPrivateKeyBytes(keyBytes []byte) (*Key, error) {
 		return nil, fmt.Errorf("failed to calculate key hash: %v", err)
 	}
 
-	return &Key{-1, keyHash, privateKey.algorithm, privateKey.bitSize, "", nil}, nil
+	return &Key{-1, keyHash, privateKey.spec, "", nil}, nil
 }
 
 func loadPrivateKeyFromPEM(keyBytes []byte) (privateKeyInfo, error) {
 	if key, err := x509.ParsePKCS1PrivateKey(keyBytes); err == nil {
-		return privateKeyInfo{key, "RSA", key.Size() * 8}, nil
+		return privateKeyInfo{key, "RSA" + strconv.Itoa(key.Size()*8)}, nil
 	}
 	if key, err := x509.ParseECPrivateKey(keyBytes); err == nil {
-		return privateKeyInfo{key, "ECDSA/" + key.Params().Name, key.Params().BitSize}, nil
+		return privateKeyInfo{key, "ECDSA" + strconv.Itoa(key.Params().BitSize)}, nil
 	}
 	if key, err := x509.ParsePKCS8PrivateKey(keyBytes); err == nil {
 		switch priv := key.(type) {
 		case *rsa.PrivateKey:
-			return privateKeyInfo{priv, "RSA", priv.Size() * 8}, nil
+			return privateKeyInfo{priv, "RSA" + strconv.Itoa(priv.Size()*8)}, nil
 		case *ecdsa.PrivateKey:
-			return privateKeyInfo{priv, "ECDSA/" + priv.Params().Name, priv.Params().BitSize}, nil
+			return privateKeyInfo{priv, "ECDSA" + strconv.Itoa(priv.Params().BitSize)}, nil
 		case ed25519.PrivateKey:
-			return privateKeyInfo{priv, "Ed25519", len(priv) * 8}, nil
+			return privateKeyInfo{priv, "Ed25519/" + strconv.Itoa(len(priv)*8)}, nil
 		case *ecdh.PrivateKey:
-			return privateKeyInfo{priv, "ECDH", len(priv.Bytes()) * 8}, nil
+			return privateKeyInfo{priv, "ECDH" + strconv.Itoa(len(priv.Bytes())*8)}, nil
 		default:
 			return privateKeyInfo{}, fmt.Errorf("unsupported private key type: %T", key)
 		}

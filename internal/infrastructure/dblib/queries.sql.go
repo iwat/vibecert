@@ -242,16 +242,15 @@ func (q *Queries) DeleteCertificate(ctx context.Context, id int) error {
 
 const createKey = `-- name: CreateKey :one
 INSERT OR REPLACE INTO key (
-    public_key_hash, key_type, key_size, pem_data
-) VALUES (?, ?, ?, ?)
+    public_key_hash, key_spec, pem_data
+) VALUES (?, ?, ?)
 RETURNING id
 `
 
 func (q *Queries) CreateKey(ctx context.Context, arg *domain.Key) (*domain.Key, error) {
 	row := q.db.QueryRowContext(ctx, createKey,
 		arg.PublicKeyHash,
-		arg.KeyType,
-		arg.KeySize,
+		arg.KeySpec,
 		arg.PEMData,
 	)
 	var id int
@@ -264,7 +263,7 @@ func (q *Queries) CreateKey(ctx context.Context, arg *domain.Key) (*domain.Key, 
 
 const keyByID = `-- name: KeyByID :one
 SELECT
-    id, public_key_hash, key_type, key_size, pem_data
+    id, public_key_hash, key_spec, pem_data
 FROM key
 WHERE id = ?
 `
@@ -275,8 +274,7 @@ func (q *Queries) KeyByID(ctx context.Context, id int) (*domain.Key, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.PublicKeyHash,
-		&i.KeyType,
-		&i.KeySize,
+		&i.KeySpec,
 		&i.PEMData,
 	)
 	return &i, err
@@ -284,7 +282,7 @@ func (q *Queries) KeyByID(ctx context.Context, id int) (*domain.Key, error) {
 
 const keyByPublicKeyHash = `-- name: KeyByPublicKeyHash :one
 SELECT
-    id, public_key_hash, key_type, key_size, pem_data
+    id, public_key_hash, key_spec, pem_data
 FROM key
 WHERE public_key_hash = ?
 `
@@ -295,8 +293,7 @@ func (q *Queries) KeyByPublicKeyHash(ctx context.Context, publicKeyHash string) 
 	err := row.Scan(
 		&i.ID,
 		&i.PublicKeyHash,
-		&i.KeyType,
-		&i.KeySize,
+		&i.KeySpec,
 		&i.PEMData,
 	)
 	return &i, err
@@ -304,7 +301,7 @@ func (q *Queries) KeyByPublicKeyHash(ctx context.Context, publicKeyHash string) 
 
 const allKeys = `-- name: AllKeys :many
 SELECT
-    id, public_key_hash, key_type, key_size, pem_data
+    id, public_key_hash, key_spec, pem_data
 FROM key
 `
 
@@ -320,8 +317,7 @@ func (q *Queries) AllKeys(ctx context.Context) ([]*domain.Key, error) {
 		if err := rows.Scan(
 			&i.ID,
 			&i.PublicKeyHash,
-			&i.KeyType,
-			&i.KeySize,
+			&i.KeySpec,
 			&i.PEMData,
 		); err != nil {
 			return nil, err
