@@ -135,6 +135,48 @@ func (app *App) ExportPrivateKey(ctx context.Context, id int) (string, error) {
 	return key.PEMData, nil
 }
 
+func (app *App) DeleteKey(ctx context.Context, id int, force bool) error {
+	key, err := app.db.KeyByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(key)
+
+	certs, err := app.db.CertificatesByPublicKeyHash(ctx, key.PublicKeyHash)
+	if err != nil {
+		return err
+	}
+	if len(certs) > 0 {
+		for _, cert := range certs {
+			fmt.Println("-", cert)
+		}
+		return errors.New("key is in use")
+	}
+	fmt.Println("No certificates using this key")
+
+	if !force {
+		ok := app.confirmer.Confirm("Delete the key?")
+		if !ok {
+			return ErrCancelled
+		}
+	}
+
+	tx := app.db.Begin(ctx)
+	defer tx.Rollback()
+
+	err = tx.DeleteKey(ctx, key.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete key: %v", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+	return err
+}
+
 func (app *App) PruneUnusedKeys(ctx context.Context, force bool) error {
 	keys, err := app.db.AllKeys(ctx)
 	if err != nil {

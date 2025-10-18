@@ -132,8 +132,9 @@ func keyDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 		Use:   "delete",
 		Short: "Delete a private key",
 		Long:  "Delete a private key",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return appBuilder.App(cmd.Context()).DeleteKey(cmd.Context(), id, force)
 		},
 	}
 	deleteCmd.Flags().IntVar(&id, "id", -1, "Private key ID")
