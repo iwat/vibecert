@@ -106,15 +106,9 @@ func TestDeleteCertificate_Cascade(t *testing.T) {
 	}
 
 	// Test deleting the root CA
-	deleteResult, err := app.DeleteCertificate(t.Context(), rootCert.ID, true)
+	err = app.DeleteCertificate(t.Context(), rootCert.ID, true)
 	if err != nil {
 		t.Fatalf("Failed to delete root CA: %v", err)
-	}
-	if deleteResult == nil {
-		t.Fatal("Delete result should not be nil")
-	}
-	if deleteResult.ChildrenCount != 1 {
-		t.Fatalf("Expected 1 extra child(ren) to be deleted, got %d", deleteResult.ChildrenCount)
 	}
 }
 

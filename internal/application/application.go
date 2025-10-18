@@ -195,16 +195,6 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 	return nil
 }
 
-// DeleteCertificate deletes a certificate and optionally its key
-type DeleteResult struct {
-	Subject            string
-	CertificateDeleted bool
-	KeyDeleted         bool
-	KeyPreserved       bool
-	KeyUsageCount      int
-	ChildrenCount      int
-}
-
 func (app *App) askPasswordWithConfirmation(label string) ([]byte, error) {
 	password, err := app.passwordReader.ReadPassword("Enter " + label + ": ")
 	if err != nil {

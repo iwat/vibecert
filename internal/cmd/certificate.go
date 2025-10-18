@@ -33,6 +33,7 @@ func certificateTreeCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Display certificate dependency tree",
 		Long:  "Display certificate dependency tree",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			tree := appBuilder.App(cmd.Context()).BuildCertificateTree(cmd.Context())
 			printCertificateTree(tree, "")
 			return nil
@@ -49,6 +50,7 @@ func certificateImportCmd(appBuilder *AppBuilder) *cobra.Command {
 		Long:  "Import a certificate",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			var file string
 			if len(args) == 0 {
 				file = "-"
@@ -78,6 +80,7 @@ func certificateExportCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Export a certificate",
 		Long:  "Export a certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			pem, err := appBuilder.App(cmd.Context()).ExportCertificate(cmd.Context(), id)
 			if err != nil {
 				return err
@@ -102,11 +105,11 @@ func certificateDeleteCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Delete a certificate and its dedicated private key",
 		Long:  "Delete a certificate and its dedicated private key",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := appBuilder.App(cmd.Context()).DeleteCertificate(cmd.Context(), id, force)
+			cmd.SilenceUsage = true
+			err := appBuilder.App(cmd.Context()).DeleteCertificate(cmd.Context(), id, force)
 			if err != nil {
 				return err
 			}
-			fmt.Println(result)
 			return nil
 		},
 	}
@@ -143,6 +146,7 @@ func certificateCreateRootCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Create a root certificate",
 		Long:  "Create a root certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			cert, _, err := appBuilder.App(cmd.Context()).CreateCertificate(cmd.Context(), &request)
 			if err != nil {
 				return err
@@ -170,6 +174,7 @@ func certificateCreateIntermediateCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Create an intermediate certificate",
 		Long:  "Create an intermediate certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			cert, _, err := appBuilder.App(cmd.Context()).CreateCertificate(cmd.Context(), &request)
 			if err != nil {
 				return err
@@ -198,6 +203,7 @@ func certificateCreateLeafCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Create a leaf certificate",
 		Long:  "Create a leaf certificate",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			cert, _, err := appBuilder.App(cmd.Context()).CreateCertificate(cmd.Context(), &request)
 			if err != nil {
 				return err

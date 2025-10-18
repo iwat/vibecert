@@ -26,7 +26,7 @@ type OSConfirmer struct{}
 
 // Confirm prompts the user with a message and waits for a Y/N response.
 func (c *OSConfirmer) Confirm(message string) bool {
-	fmt.Println(message)
+	fmt.Println(message + " (y/N)")
 
 	var response string
 	fmt.Scanln(&response)

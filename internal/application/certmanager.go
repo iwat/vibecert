@@ -65,13 +65,13 @@ func (app *App) ImportCertificates(ctx context.Context, filename string) ([]*dom
 }
 
 // DeleteCertificate deletes a certificate and optionally its key
-func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) (*DeleteResult, error) {
+func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) error {
 	cert, err := app.db.CertificateByID(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("certificate with id %d not found", id)
+			return fmt.Errorf("certificate with id %d not found", id)
 		}
-		return nil, fmt.Errorf("failed to load certificate: %v", err)
+		return fmt.Errorf("failed to load certificate: %v", err)
 	}
 	slog.Info("initial certificate", "cert", cert)
 
@@ -82,7 +82,7 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) (*Del
 		for _, cert := range remainingCerts {
 			childCerts, err := app.db.CertificatesByIssuerAndAuthorityKeyID(ctx, cert.SubjectDN, cert.SubjectKeyID)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load child certificates: %v", err)
+				return fmt.Errorf("failed to load child certificates: %v", err)
 			}
 			allCerts = append(allCerts, childCerts...)
 			next = append(next, childCerts...)
@@ -95,24 +95,28 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) (*Del
 	for _, node := range nodes {
 		fmt.Println(node)
 	}
-	ok := app.confirmer.Confirm("Delete the above certificates?")
-	if !ok {
-		return nil, ErrCancelled
-	}
-
-	result := &DeleteResult{
-		Subject: cert.SubjectDN,
+	if !force {
+		ok := app.confirmer.Confirm("Delete the above certificates?")
+		if !ok {
+			return ErrCancelled
+		}
 	}
 
 	tx := app.db.Begin(ctx)
 	defer tx.Rollback()
 
+	for _, node := range nodes {
+		err := tx.DeleteCertificate(ctx, node.Certificate.ID)
+		if err != nil {
+			return err
+		}
+	}
+
 	err = tx.Commit()
 	if err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %v", err)
+		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
-	result.CertificateDeleted = true
-	return result, err
+	return err
 }
 
 func (app *App) buildCertificateTree(ctx context.Context, certs []*domain.Certificate) []*CertificateNode {

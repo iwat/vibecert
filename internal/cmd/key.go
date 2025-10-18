@@ -28,6 +28,7 @@ func keyListCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "List private keys",
 		Long:  "List private keys",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			keyInfos, err := appBuilder.App(cmd.Context()).ListKeys(cmd.Context())
 			if err != nil {
 				return err
@@ -53,6 +54,7 @@ func keyImportCmd(appBuilder *AppBuilder) *cobra.Command {
 		Long:  "Import a private key",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			var file string
 			if len(args) == 0 {
 				file = "-"
@@ -82,6 +84,7 @@ func keyExportCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Export a private key",
 		Long:  "Export a private key",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			pem, err := appBuilder.App(cmd.Context()).ExportPrivateKey(cmd.Context(), id)
 			if err != nil {
 				return err
@@ -103,6 +106,7 @@ func keyReencryptCmd(appBuilder *AppBuilder) *cobra.Command {
 		Short: "Reencrypt a private key",
 		Long:  "Reencrypt a private key",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			err := appBuilder.App(cmd.Context()).ReencryptPrivateKey(cmd.Context(), id)
 			if err != nil {
 				return err
