@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -169,7 +170,7 @@ func (c *Certificate) IsRoot() bool {
 func (c *Certificate) Text() string {
 	path, err := exec.LookPath("openssl")
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	} else {
 		var stdout bytes.Buffer
 		cmd := exec.Command(path, "x509", "-text")
