@@ -223,3 +223,22 @@ func (app *App) PruneUnusedKeys(ctx context.Context, force bool) error {
 	}
 	return err
 }
+
+func (app *App) CreateKey(ctx context.Context, keySpec KeySpec) (*domain.Key, error) {
+	newPassword, err := app.askPasswordWithConfirmation("Password for the key")
+	if err != nil {
+		return nil, fmt.Errorf("failed to ask for new password: %v", err)
+	}
+
+	key, err := keySpec.Key(newPassword)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	_, err = app.db.CreateKey(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create key: %v", err)
+	}
+
+	return key, nil
+}

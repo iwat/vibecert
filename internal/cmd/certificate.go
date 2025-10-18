@@ -129,7 +129,8 @@ func setupFlagsForCreateCertificateParams(cmd *cobra.Command, params *applicatio
 	cmd.Flags().StringVar(&params.OrganizationName, "dn-o", "", "Organization Name (optional)")
 	cmd.Flags().StringVar(&params.OrganizationalUnitName, "dn-ou", "", "Organizational Unit Name (optional)")
 	cmd.Flags().IntVar(&params.ValidDays, "valid-days", params.ValidDays, "Certificate validity in days")
-	cmd.Flags().Var(&params.KeySpec, "keyspec", "Key spec")
+	cmd.Flags().Var(&params.KeySpec, "keyspec", "Key spec ["+application.KnownKeySpecs()+"]")
+
 	return nil
 }
 

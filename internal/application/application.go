@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/iwat/vibecert/internal/domain"
 	"github.com/iwat/vibecert/internal/infrastructure/dblib"
@@ -61,7 +62,19 @@ const (
 	KeySpecECDSA384 KeySpec = "ECDSA521"
 )
 
+func KnownKeySpecs() string {
+	return strings.Join([]string{
+		string(KeySpecRSA2048),
+		string(KeySpecRSA3072),
+		string(KeySpecRSA4096),
+		string(KeySpecECDSA224),
+		string(KeySpecECDSA256),
+		string(KeySpecECDSA384),
+	}, ", ")
+}
+
 func (k *KeySpec) Set(v string) error {
+	v = strings.ToUpper(v)
 	switch v {
 	case string(KeySpecRSA2048):
 		*k = KeySpecRSA2048

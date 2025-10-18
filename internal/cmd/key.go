@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/iwat/vibecert/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -19,6 +21,7 @@ func keyCmd(appBuilder *AppBuilder) *cobra.Command {
 	keyCmd.AddCommand(keyReencryptCmd(appBuilder))
 	keyCmd.AddCommand(keyDeleteCmd(appBuilder))
 	keyCmd.AddCommand(keyPruneCmd(appBuilder))
+	keyCmd.AddCommand(keyCreateCmd(appBuilder))
 
 	return keyCmd
 }
@@ -90,7 +93,7 @@ func keyExportCmd(appBuilder *AppBuilder) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Println(pem)
+			fmt.Println(strings.TrimSpace(pem))
 			return nil
 		},
 	}
@@ -156,6 +159,29 @@ func keyPruneCmd(appBuilder *AppBuilder) *cobra.Command {
 		},
 	}
 	deleteCmd.Flags().BoolVar(&force, "force", false, "Attempt to delete the unused keys without prompting for confirmation")
+
+	return deleteCmd
+}
+
+func keyCreateCmd(appBuilder *AppBuilder) *cobra.Command {
+	var keySpec application.KeySpec
+	deleteCmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a private key",
+		Long:  "Create a private key",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			key, err := appBuilder.App(cmd.Context()).CreateKey(cmd.Context(), keySpec)
+			if err != nil {
+				return err
+			}
+			fmt.Println("Created", key)
+			return nil
+		},
+	}
+
+	deleteCmd.Flags().Var(&keySpec, "keyspec", "Key spec ["+application.KnownKeySpecs()+"]")
+	deleteCmd.MarkFlagRequired("keyspec")
 
 	return deleteCmd
 }
