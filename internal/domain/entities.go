@@ -188,7 +188,15 @@ func (c *Certificate) Text() string {
 }
 
 func (c *Certificate) String() string {
-	return fmt.Sprintf("(📜 %d) %s 🔢 %s...", c.ID, c.SubjectDN, c.SerialNumber[:12])
+	return fmt.Sprintf("(📜 %d) %s 🔢 %s... ⏳ %s",
+		c.ID, c.SubjectDN, c.SerialNumber[:12], formatDuration(c.NotAfter.Sub(time.Now())))
+}
+
+func formatDuration(d time.Duration) string {
+	if d > time.Hour*24 {
+		return fmt.Sprintf("%dd", d/time.Hour/24)
+	}
+	return d.String()
 }
 
 func calculatePublicKeyHashFromX509Cert(cert *x509.Certificate) string {
