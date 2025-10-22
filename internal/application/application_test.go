@@ -1,6 +1,7 @@
 package application
 
 import (
+	"crypto/elliptic"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -36,6 +37,33 @@ func TestCreateRootCA(t *testing.T) {
 	}
 }
 
+func TestCreateRootCA_ReuseKey(t *testing.T) {
+	app, db, passwordReader, _, _, err := createTestApp(t)
+	if err != nil {
+		t.Fatalf("Failed to create test app: %v", err)
+	}
+
+	key := createOneKey(t, db, []byte("secret"))
+
+	passwordReader.passwords = []string{"secret"}
+	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+		IssuerCertificateID: SelfSignedCertificateID,
+		SubjectKeyID:        key.ID,
+		CommonName:          "test",
+		KeySpec:             KeySpecECDSA384,
+		ValidDays:           3650,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create root CA: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("Root CA should not be nil")
+	}
+	if key == nil {
+		t.Fatal("Root CA key pair should not be nil")
+	}
+}
+
 func TestCreateIntermediateCA(t *testing.T) {
 	app, _, passwordReader, _, _, err := createTestApp(t)
 	if err != nil {
@@ -56,6 +84,43 @@ func TestCreateIntermediateCA(t *testing.T) {
 	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
 		IssuerCertificateID: rootCert.ID,
 		SubjectKeyID:        NewSubjectKeyID,
+		CommonName:          "test intermediate",
+		KeySpec:             KeySpecECDSA224,
+		ValidDays:           3650,
+		IsCA:                true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create intermediate CA: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("Intermediate CA should not be nil")
+	}
+	if key == nil {
+		t.Fatal("Intermediate CA key pair should not be nil")
+	}
+}
+
+func TestCreateIntermediateCA_ReuseKey(t *testing.T) {
+	app, db, passwordReader, _, _, err := createTestApp(t)
+	if err != nil {
+		t.Fatalf("Failed to create test app: %v", err)
+	}
+
+	passwordReader.passwords = []string{"root-secret", "root-secret"}
+	rootCert, _, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+		IssuerCertificateID: SelfSignedCertificateID,
+		SubjectKeyID:        NewSubjectKeyID,
+		CommonName:          "test root",
+		KeySpec:             KeySpecRSA4096,
+		ValidDays:           3650,
+		IsCA:                true,
+	})
+
+	key := createOneKey(t, db, []byte("secret"))
+	passwordReader.passwords = []string{"root-secret", "secret"}
+	cert, key, err := app.CreateCertificate(t.Context(), &CreateCertificateRequest{
+		IssuerCertificateID: rootCert.ID,
+		SubjectKeyID:        key.ID,
 		CommonName:          "test intermediate",
 		KeySpec:             KeySpecECDSA224,
 		ValidDays:           3650,
@@ -140,6 +205,21 @@ func createTestDatabase(t *testing.T) (*dblib.Queries, error) {
 	dblib.New(db).InitializeDatabase(t.Context())
 	queries := dblib.New(db)
 	return queries, nil
+}
+
+func createOneKey(t *testing.T, db *dblib.Queries, password []byte) *domain.Key {
+	t.Helper()
+
+	key, err := domain.NewECDSAKey(elliptic.P256(), password)
+	if err != nil {
+		t.Fatalf("Failed to create root CA key pair: %v", err)
+	}
+	_, err = db.CreateKey(t.Context(), key)
+	if err != nil {
+		t.Fatalf("Failed to create root CA key pair: %v", err)
+	}
+
+	return key
 }
 
 type MockPasswordReader struct {

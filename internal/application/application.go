@@ -138,9 +138,18 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 	}
 	slog.Info("selected issuer", "cert", issuerCertificate, "key", issuerKey)
 
-	subjectKey, subjectPublicKey, subjectPrivateKey, err := app.getSubjectKeyContext(ctx, tx, req)
-	if err != nil {
-		return nil, nil, err
+	var subjectKey *domain.Key
+	var subjectPublicKey crypto.PublicKey
+	var subjectPrivateKey domain.PrivateKey
+	if issuerKey != nil && issuerKey.ID == req.SubjectKeyID {
+		subjectKey = issuerKey
+		subjectPublicKey = issuerPrivateKey.Public()
+		subjectPrivateKey = issuerPrivateKey
+	} else {
+		subjectKey, subjectPublicKey, subjectPrivateKey, err = app.getSubjectKeyContext(ctx, tx, req)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	slog.Info("selected subject key", "key", subjectKey)
 
