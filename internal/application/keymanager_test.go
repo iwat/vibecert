@@ -9,6 +9,25 @@ import (
 	"github.com/iwat/vibecert/internal/domain"
 )
 
+func TestKeyManager_ListKey(t *testing.T) {
+	app, db, _, _, _, err := createTestApp(t)
+	if err != nil {
+		t.Fatalf("Failed to create test key manager: %v", err)
+	}
+
+	createOneKey(t, db, nil)
+	createOneKey(t, db, nil)
+	createOneKey(t, db, nil)
+
+	keys, err := app.ListKeys(t.Context())
+	if err != nil {
+		t.Errorf("Failed to list keys: %v", err)
+	}
+	if len(keys) != 3 {
+		t.Errorf("Expected 3 keys, got %d", len(keys))
+	}
+}
+
 func TestKeyManager_ImportKey(t *testing.T) {
 	app, _, passwordReader, fileReader, _, err := createTestApp(t)
 	if err != nil {
