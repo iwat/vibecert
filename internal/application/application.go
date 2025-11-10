@@ -304,7 +304,7 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 	}
 
 	slog.Info("encoding PKCS#12")
-	pfxData, err := pkcs12.Modern.Encode(privateKey, cert.X509Cert(), nil, string(p12Password))
+	pfxData, err := pkcs12.Legacy.Encode(privateKey, cert.X509Cert(), nil, string(p12Password))
 	if err != nil {
 		return err
 	}
