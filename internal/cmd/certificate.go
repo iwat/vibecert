@@ -219,6 +219,8 @@ func certificateCreateLeafCmd(appBuilder *AppBuilder) *cobra.Command {
 	createLeafCmd.Flags().IntVar(&request.IssuerCertificateID, "issuer-id", 0, "Issuer certificate ID")
 	createLeafCmd.MarkFlagRequired("issuer-id")
 	setupFlagsForCreateCertificateParams(createLeafCmd, &request)
+	createLeafCmd.Flags().BoolVar(&request.IsServer, "server", false, "Create a server certificate")
+	createLeafCmd.Flags().BoolVar(&request.IsClient, "client", false, "Create a client certificate")
 
 	return createLeafCmd
 }

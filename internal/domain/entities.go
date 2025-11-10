@@ -55,6 +55,8 @@ type CreateCertificateRequest struct {
 	ValidDays              int
 	IsCA                   bool
 	PublicKey              crypto.PublicKey
+	IsServer               bool
+	IsClient               bool
 }
 
 func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
@@ -87,9 +89,13 @@ func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
 	} else {
 		template.KeyUsage = x509.KeyUsageDataEncipherment | x509.KeyUsageDigitalSignature
 		template.ExtKeyUsage = []x509.ExtKeyUsage{
-			x509.ExtKeyUsageServerAuth,
-			x509.ExtKeyUsageClientAuth,
 			x509.ExtKeyUsageCodeSigning,
+		}
+		if req.IsServer {
+			template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
+		}
+		if req.IsClient {
+			template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
 		}
 	}
 

@@ -50,6 +50,8 @@ type CreateCertificateRequest struct {
 	KeySpec                KeySpec
 	ValidDays              int
 	IsCA                   bool
+	IsServer               bool
+	IsClient               bool
 }
 
 type KeySpec string
@@ -171,6 +173,8 @@ func (app *App) CreateCertificate(ctx context.Context, req *CreateCertificateReq
 		ValidDays:              req.ValidDays,
 		IsCA:                   req.IsCA,
 		PublicKey:              subjectPublicKey,
+		IsServer:               req.IsServer,
+		IsClient:               req.IsClient,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
