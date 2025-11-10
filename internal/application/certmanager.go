@@ -93,8 +93,14 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) error
 	slog.Debug("loaded certificates", "count", len(allCerts))
 
 	nodes := app.buildCertificateTree(ctx, allCerts, make(map[string]*CertificateNode))
-	for _, node := range nodes {
+	var certs []*domain.Certificate
+	for len(nodes) > 0 {
+		node := nodes[0]
+
 		fmt.Println(node)
+
+		certs = append(certs, node.Certificates...)
+		nodes = append(nodes[1:], node.Children...)
 	}
 	if !force {
 		ok := app.confirmer.Confirm("Delete the above certificates?")
@@ -106,12 +112,10 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) error
 	tx := app.db.Begin(ctx)
 	defer tx.Rollback()
 
-	for _, node := range nodes {
-		for _, cert := range node.Certificates {
-			err := tx.DeleteCertificate(ctx, cert.ID)
-			if err != nil {
-				return err
-			}
+	for _, cert := range certs {
+		err := tx.DeleteCertificate(ctx, cert.ID)
+		if err != nil {
+			return err
 		}
 	}
 
