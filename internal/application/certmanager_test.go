@@ -61,7 +61,7 @@ func TestCertificateManager_BuildCertificateTree(t *testing.T) {
 	// Find root certificate in tree
 	var foundRoot *CertificateNode
 	for _, cert := range tree {
-		if cert.Certificate.SerialNumber == "root123" {
+		if cert.Certificates[0].SerialNumber == "root123" {
 			foundRoot = cert
 			break
 		}
@@ -76,7 +76,7 @@ func TestCertificateManager_BuildCertificateTree(t *testing.T) {
 		t.Errorf("Expected root to have 1 child, got %d", len(foundRoot.Children))
 	}
 
-	if foundRoot.Children[0].Certificate.SerialNumber != "intermediate456" {
+	if foundRoot.Children[0].Certificates[0].SerialNumber != "intermediate456" {
 		t.Errorf("Expected intermediate as child of root")
 	}
 
@@ -86,7 +86,7 @@ func TestCertificateManager_BuildCertificateTree(t *testing.T) {
 		t.Errorf("Expected intermediate to have 1 child, got %d", len(intermediate.Children))
 	}
 
-	if intermediate.Children[0].Certificate.SerialNumber != "leaf789" {
+	if intermediate.Children[0].Certificates[0].SerialNumber != "leaf789" {
 		t.Errorf("Expected leaf as child of intermediate")
 	}
 }

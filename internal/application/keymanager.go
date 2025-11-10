@@ -3,6 +3,9 @@ package application
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -126,10 +129,33 @@ func (app *App) ReencryptPrivateKey(ctx context.Context, id int) error {
 }
 
 // ExportPrivateKey exports the private key for a certificate
-func (app *App) ExportPrivateKey(ctx context.Context, id int) (string, error) {
+func (app *App) ExportPrivateKey(ctx context.Context, id int, decrypt bool) (string, error) {
 	key, err := app.db.KeyByID(ctx, id)
 	if err != nil {
 		return "", err
+	}
+
+	if decrypt {
+		decryptedKey, err := app.tryDecryptPrivateKey(key, "the key")
+		if err != nil {
+			return "", fmt.Errorf("failed to decrypt private key: %v", err)
+		}
+		var block pem.Block
+		switch typedKey := decryptedKey.(type) {
+		case *rsa.PrivateKey:
+			block.Type = "RSA PRIVATE KEY"
+			block.Bytes = x509.MarshalPKCS1PrivateKey(typedKey)
+		case *ecdsa.PrivateKey:
+			keyBytes, err := x509.MarshalECPrivateKey(typedKey)
+			if err != nil {
+				return "", fmt.Errorf("failed to marshal EC private key: %v", err)
+			}
+			block.Type = "EC PRIVATE KEY"
+			block.Bytes = keyBytes
+		default:
+			return "", fmt.Errorf("unsupported key type: %T", typedKey)
+		}
+		return string(pem.EncodeToMemory(&block)), nil
 	}
 
 	return key.PEMData, nil

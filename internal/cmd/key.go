@@ -82,14 +82,17 @@ func keyImportCmd(appBuilder *AppBuilder) *cobra.Command {
 }
 
 func keyExportCmd(appBuilder *AppBuilder) *cobra.Command {
-	var id int
+	var (
+		id      int
+		decrypt bool
+	)
 	exportCmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export a private key",
 		Long:  "Export a private key",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			pem, err := appBuilder.App(cmd.Context()).ExportPrivateKey(cmd.Context(), id)
+			pem, err := appBuilder.App(cmd.Context()).ExportPrivateKey(cmd.Context(), id, decrypt)
 			if err != nil {
 				return err
 			}
@@ -99,6 +102,7 @@ func keyExportCmd(appBuilder *AppBuilder) *cobra.Command {
 	}
 	exportCmd.Flags().IntVar(&id, "id", -1, "Private key ID")
 	exportCmd.MarkFlagRequired("id")
+	exportCmd.Flags().BoolVar(&decrypt, "decrypt", false, "Decrypt the private key")
 
 	return exportCmd
 }

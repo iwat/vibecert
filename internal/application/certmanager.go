@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/iwat/vibecert/internal/domain"
@@ -17,7 +18,7 @@ func (app *App) BuildCertificateTree(ctx context.Context) []*CertificateNode {
 	if err != nil {
 		return nil
 	}
-	return app.buildCertificateTree(ctx, certs)
+	return app.buildCertificateTree(ctx, certs, make(map[string]*CertificateNode))
 }
 
 // ExportCertificate exports certificate in human-readable format
@@ -91,7 +92,7 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) error
 	}
 	slog.Debug("loaded certificates", "count", len(allCerts))
 
-	nodes := app.buildCertificateTree(ctx, allCerts)
+	nodes := app.buildCertificateTree(ctx, allCerts, make(map[string]*CertificateNode))
 	for _, node := range nodes {
 		fmt.Println(node)
 	}
@@ -106,9 +107,11 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) error
 	defer tx.Rollback()
 
 	for _, node := range nodes {
-		err := tx.DeleteCertificate(ctx, node.Certificate.ID)
-		if err != nil {
-			return err
+		for _, cert := range node.Certificates {
+			err := tx.DeleteCertificate(ctx, cert.ID)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -119,26 +122,47 @@ func (app *App) DeleteCertificate(ctx context.Context, id int, force bool) error
 	return err
 }
 
-func (app *App) buildCertificateTree(ctx context.Context, certs []*domain.Certificate) []*CertificateNode {
+func (app *App) buildCertificateTree(
+	ctx context.Context,
+	certs []*domain.Certificate,
+	lookup map[string]*CertificateNode,
+) []*CertificateNode {
 	var nodes []*CertificateNode
 	for _, cert := range certs {
 		key, err := app.db.KeyByPublicKeyHash(ctx, cert.PublicKeyHash)
 		if err != nil {
 			key = nil
 		}
-		nodes = append(nodes, &CertificateNode{cert, key, nil})
+		lookupKey := certificateNodeLookupKey(cert)
+		existing := lookup[lookupKey]
+		if existing == nil {
+			existing = &CertificateNode{
+				cert.SubjectDN,
+				cert.SubjectKeyID,
+				cert.IssuerDN,
+				cert.AuthorityKeyID,
+				cert.IsSelfSigned(),
+				[]*domain.Certificate{cert},
+				key,
+				nil,
+			}
+			lookup[lookupKey] = existing
+		} else {
+			existing.Certificates = append(existing.Certificates, cert)
+		}
+		nodes = append(nodes, existing)
 	}
 
 	var roots []*CertificateNode
 	for _, node := range nodes {
-		if node.Certificate.IsSelfSigned() {
+		if node.IsSelfSigned {
 			roots = append(roots, node)
 		} else {
 			// Find parent by matching issuer
 			parentFound := false
 			for _, parent := range nodes {
-				if parent.Certificate.SubjectDN == node.Certificate.IssuerDN &&
-					parent.Certificate.SubjectKeyID == node.Certificate.AuthorityKeyID {
+				if parent.SubjectDN == node.IssuerDN &&
+					parent.SubjectKeyID == node.AuthorityKeyID {
 					parent.Children = append(parent.Children, node)
 					parentFound = true
 					break
@@ -155,22 +179,38 @@ func (app *App) buildCertificateTree(ctx context.Context, certs []*domain.Certif
 }
 
 type CertificateNode struct {
-	Certificate *domain.Certificate
-	Key         *domain.Key
-	Children    []*CertificateNode
+	SubjectDN      string
+	SubjectKeyID   string
+	IssuerDN       string
+	AuthorityKeyID string
+	IsSelfSigned   bool
+	Certificates   []*domain.Certificate
+	Key            *domain.Key
+	Children       []*CertificateNode
 }
 
 func (n *CertificateNode) String() string {
-	return n.string("")
+	if len(n.Certificates) == 1 {
+		return n.Certificates[0].String()
+	}
+	var ids []string
+	for _, c := range n.Certificates {
+		ids = append(ids, strconv.Itoa(c.ID))
+	}
+	return fmt.Sprintf("(📜 %s) %s", strings.Join(ids, ", "), n.SubjectDN)
 }
 
 func (n *CertificateNode) string(prefix string) string {
 	var output strings.Builder
 	output.WriteString(prefix)
-	output.WriteString(n.Certificate.String())
+	output.WriteString(n.String())
 	for _, child := range n.Children {
 		output.WriteRune('\n')
 		output.WriteString(child.string(prefix + "  "))
 	}
 	return output.String()
+}
+
+func certificateNodeLookupKey(cert *domain.Certificate) string {
+	return fmt.Sprintf("%s\t%s\t%s\t%s\t%t", cert.SubjectDN, cert.SubjectKeyID, cert.IssuerDN, cert.AuthorityKeyID, cert.IsSelfSigned())
 }
