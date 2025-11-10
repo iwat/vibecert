@@ -32,6 +32,14 @@ SELECT
 FROM certificate
 WHERE issuer_dn = ? AND authority_key_id = ?;
 
+-- name: CertificatesBySubjectAndSubjectKeyID :many
+SELECT
+    id, serial_number, subject_dn, issuer_dn, not_before, not_after,
+    signature_algo, subject_key_id, authority_key_id,
+    is_ca, pem_data, public_key_hash
+FROM certificate
+WHERE subject_dn = ? AND subject_key_id = ?;
+
 -- name: CertificatesByPublicKeyHash :many
 SELECT
     id, serial_number, subject_dn, issuer_dn, not_before, not_after,

@@ -153,6 +153,51 @@ func (q *Queries) CertificatesByIssuerAndAuthorityKeyID(ctx context.Context, iss
 	return items, nil
 }
 
+const certificatesBySubjectAndSubjectKeyID = `-- name: CertificatesBySubjectAndSubjectKeyID :many
+SELECT
+    id, serial_number, subject_dn, issuer_dn, not_before, not_after,
+    signature_algo, subject_key_id, authority_key_id,
+    is_ca, pem_data, public_key_hash
+FROM certificate
+WHERE subject_dn = ? AND subject_key_id = ?;
+`
+
+func (q *Queries) CertificatesBySubjectAndSubjectKeyID(ctx context.Context, subjectDN, subjectKeyID string) ([]*domain.Certificate, error) {
+	rows, err := q.db.QueryContext(ctx, certificatesBySubjectAndSubjectKeyID, subjectDN, subjectKeyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*domain.Certificate
+	for rows.Next() {
+		var i domain.Certificate
+		if err := rows.Scan(
+			&i.ID,
+			&i.SerialNumber,
+			&i.SubjectDN,
+			&i.IssuerDN,
+			&i.NotBefore,
+			&i.NotAfter,
+			&i.SignatureAlgorithm,
+			&i.SubjectKeyID,
+			&i.AuthorityKeyID,
+			&i.IsCA,
+			&i.PEMData,
+			&i.PublicKeyHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const certificatesByPublicKeyHash = `-- name: CertificatesByPublicKeyHash :many
 SELECT
     id, serial_number, subject_dn, issuer_dn, not_before, not_after,

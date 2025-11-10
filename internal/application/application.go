@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/elliptic"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -303,8 +304,14 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 		return fmt.Errorf("failed to read password: %v", err)
 	}
 
+	parents := app.findParents(ctx, cert)
+	var x509Parents []*x509.Certificate
+	for _, parent := range parents {
+		x509Parents = append(x509Parents, parent.X509Cert())
+	}
+
 	slog.Info("encoding PKCS#12")
-	pfxData, err := pkcs12.Legacy.Encode(privateKey, cert.X509Cert(), nil, string(p12Password))
+	pfxData, err := pkcs12.Legacy.Encode(privateKey, cert.X509Cert(), x509Parents, string(p12Password))
 	if err != nil {
 		return err
 	}
@@ -314,6 +321,33 @@ func (app *App) ExportCertificateWithKeyToPKCS12(ctx context.Context, id int, fi
 		return fmt.Errorf("failed to write PKCS#12 file: %v", err)
 	}
 	return nil
+}
+
+func (app *App) findParents(ctx context.Context, cert *domain.Certificate) []*domain.Certificate {
+	uniqueParents := make(map[int]*domain.Certificate)
+	certs := []*domain.Certificate{cert}
+	for len(certs) > 0 {
+		nextCert := certs[0]
+		certs = certs[1:]
+
+		immediateParents, err := app.db.CertificatesBySubjectAndSubjectKeyID(ctx, nextCert.IssuerDN, nextCert.AuthorityKeyID)
+		if err != nil {
+			break
+		}
+		for _, parent := range immediateParents {
+			if _, ok := uniqueParents[parent.ID]; !ok {
+				uniqueParents[parent.ID] = parent
+				certs = append(certs, parent)
+			}
+		}
+	}
+
+	var parents []*domain.Certificate
+	for _, parent := range uniqueParents {
+		parents = append(parents, parent)
+	}
+
+	return parents
 }
 
 func (app *App) askPasswordWithConfirmation(label string) ([]byte, error) {
