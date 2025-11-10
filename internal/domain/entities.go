@@ -85,17 +85,17 @@ func NewCertificate(req *CreateCertificateRequest) (*Certificate, error) {
 	}
 	if req.IsCA {
 		template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
-		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning}
 	} else {
-		template.KeyUsage = x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment | x509.KeyUsageDigitalSignature
-		template.ExtKeyUsage = []x509.ExtKeyUsage{
-			x509.ExtKeyUsageCodeSigning,
-		}
+		template.KeyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
 		if req.IsServer {
-			template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
+			template.ExtKeyUsage = []x509.ExtKeyUsage{
+				x509.ExtKeyUsageServerAuth,
+			}
 		}
 		if req.IsClient {
-			template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
+			template.ExtKeyUsage = []x509.ExtKeyUsage{
+				x509.ExtKeyUsageClientAuth,
+			}
 		}
 	}
 
